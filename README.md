@@ -17,6 +17,19 @@ Agent 运行轨迹采集 SDK。业务方以**最小改动**接入后，SDK 自�
 
 ## 安装
 
+**业务方（从公司私有 PyPI 安装）**：
+
+```bash
+pip install agent-trace-sdk              # 核心（仅依赖 pydantic）
+pip install "agent-trace-sdk[xlsx]"      # 需要 Excel 导出
+pip install "agent-trace-sdk[all]"       # 全部可选依赖
+```
+
+一次配好 pip 源（Nexus / Artifactory）后即可，配置方法与发布流程见
+`docs/publish_private_pypi.md`。
+
+**SDK 开发者（源码安装）**：
+
 ```bash
 pip install -e .            # 仅核心（pydantic）
 pip install -e ".[xlsx]"    # 需要 Excel 导出
@@ -175,6 +188,18 @@ from agent_trace.integrations.deerflow import AgentTraceMiddleware
 agent = create_agent(model=..., tools=[...], middleware=[AgentTraceMiddleware(tracer)])
 ```
 
+## 发布（私有 PyPI）
+
+```bash
+python tools/release.py --build-only     # 只出包，产物在 dist/
+python tools/release.py                  # 构建 + 校验 + 上传私有仓库
+```
+
+上传地址与凭证走环境变量（`AGENT_TRACE_PYPI_URL` / `AGENT_TRACE_PYPI_USER` /
+`AGENT_TRACE_PYPI_PASSWORD`）或 `~/.pypirc`，不写进代码。
+完整说明（Nexus / Artifactory 建库、pip 源配置、离线安装）见
+`docs/publish_private_pypi.md`。
+
 ## 目录结构
 
 ```
@@ -185,9 +210,12 @@ src/agent_trace/
 ├── config.py        # 配置：环境变量 + 代码初始化
 ├── ingest.py        # 离线导入与多轮按 turn_id 切分
 ├── integrations/    # 框架适配（deerflow.py）
+├── transport/       # HTTP 上报：队列 / 重试 / 失败落盘
 ├── utils.py         # 通用工具
-└── exporters/       # json / jsonl / xlsx / base
+└── exporters/       # json / jsonl / xlsx / http / base
 examples/            # 可运行示例
+tools/release.py     # 一键构建并发布到私有 PyPI
+schema/              # 语言无关的 JSON Schema 契约
 ```
 
 ## 示例

@@ -1,13 +1,29 @@
 [build-system]
-requires = ["setuptools>=68"]
+requires = ["setuptools>=77", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "agent-trace-sdk"
 version = "0.1.0"
-description = "Agent 运行轨迹采集 SDK（turn 粒度，手动埋点优先）"
+description = "Agent 运行轨迹采集 SDK：turn 粒度采集系统提示词、用户输入、推理、工具调用与最终回答，并结构化导出"
 readme = "README.md"
 requires-python = ">=3.9"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "pfy0" }]
+keywords = ["agent", "trace", "observability", "llm", "turn", "langgraph", "deerflow"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Typing :: Typed",
+]
 dependencies = [
     "pydantic>=2.5",
 ]
@@ -15,7 +31,14 @@ dependencies = [
 [project.optional-dependencies]
 xlsx = ["openpyxl>=3.1"]
 http = ["httpx>=0.27"]
+deerflow = ["langchain>=0.3"]
+dev = ["build>=1.2", "twine>=5.0", "openpyxl>=3.1", "httpx>=0.27"]
 all = ["openpyxl>=3.1", "httpx>=0.27"]
+
+[project.urls]
+Homepage = "https://github.com/pfy0/agent_trace_sdk"
+Repository = "https://github.com/pfy0/agent_trace_sdk"
+Issues = "https://github.com/pfy0/agent_trace_sdk/issues"
 
 [tool.setuptools.packages.find]
 where = ["src"]
