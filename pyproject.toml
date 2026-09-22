@@ -1,0 +1,24 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "agent-trace-sdk"
+version = "0.1.0"
+description = "Agent 运行轨迹采集 SDK（turn 粒度，手动埋点优先）"
+readme = "README.md"
+requires-python = ">=3.9"
+dependencies = [
+    "pydantic>=2.5",
+]
+
+[project.optional-dependencies]
+xlsx = ["openpyxl>=3.1"]
+http = ["httpx>=0.27"]
+all = ["openpyxl>=3.1", "httpx>=0.27"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+agent_trace = ["py.typed"]

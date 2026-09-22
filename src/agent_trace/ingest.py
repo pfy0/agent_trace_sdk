@@ -1,0 +1,109 @@
+"""离线导入：把现成的 messages / conversation 数据一次性喂给 SDK。
+
+用于「业务方已经攒好了一轮对话」或「批量导入历史数据」的场景；
+实时采集请用 `Tracer.turn()`。多轮数据会按 turn_id 自动切分成多条 trace。
+"""
+from __future__ import annotations
+
+from typing import Any, Dict, Iterable, List, Optional, Sequence
+
+from .schemas import Trace
+
+
+def _extract_steps(payload: Any, depth: int = 0, max_depth: int = 8) -> Optional[List[Dict[str, Any]]]:
+    """在任意嵌套结构里定位 step 列表，兼容 conversation / messages 键名。"""
+    if depth > max_depth:
+        return None
+    if isinstance(payload, list):
+        if payload and all(isinstance(item, dict) and "message_type" in item for item in payload):
+            return list(payload)
+        return None
+    if isinstance(payload, dict):
+        for key in ("conversation", "messages"):
+            inner = payload.get(key)
+            if isinstance(inner, list):
+                return list(inner)
+        for value in payload.values():
+            found = _extract_steps(value, depth + 1, max_depth)
+            if found is not None:
+                return found
+    return None
+
+
+def import_payload(
+    payload: Any,
+    turn_id: Optional[str] = None,
+    session_id: Optional[str] = None,
+    **trace_meta: Any,
+) -> List[Trace]:
+    """导入单轮数据，返回一条 trace 的列表。
+
+    若 payload 里带 turn_id / session_id，优先使用；否则用传入值或自动生成。
+    """
+    steps = _extract_steps(payload)
+    if steps is None:
+        raise ValueError("未在 payload 中找到 conversation / messages 数组")
+
+    if isinstance(payload, dict):
+        turn_id = payload.get("turn_id") or turn_id
+        session_id = payload.get("session_id") or session_id
+        for key in ("agent_name", "agent_version", "env", "model", "tags", "meta"):
+            if key in payload and key not in trace_meta:
+                trace_meta[key] = payload[key]
+
+    from .schemas import generate_id
+
+    trace = Trace.from_raw(
+        {
+            "turn_id": turn_id or generate_id("turn"),
+            "session_id": session_id or generate_id("sess"),
+            "conversation": steps,
+            **trace_meta,
+        }
+    )
+    return [trace]
+
+
+def split_by_turn(
+    payload: Any,
+    session_id: Optional[str] = None,
+    **trace_meta: Any,
+) -> List[Trace]:
+    """多轮数据按 turn_id 切分成多条 trace。
+
+    step 里必须带 turn_id；缺 turn_id 的消息会被跳过（无法归属到任何轮次）。
+    切出的 trace 按首次出现的顺序排列。
+    """
+    steps = _extract_steps(payload)
+    if steps is None:
+        raise ValueError("未在 payload 中找到 conversation / messages 数组")
+
+    buckets: Dict[str, List[Dict[str, Any]]] = {}
+    order: List[str] = []
+    for raw in steps:
+        if not isinstance(raw, dict):
+            continue
+        turn_id = raw.pop("turn_id", None)
+        if turn_id is None:
+            continue
+        if turn_id not in buckets:
+            buckets[turn_id] = []
+            order.append(turn_id)
+        buckets[turn_id].append(raw)
+
+    if not order:
+        raise ValueError("消息里没有 turn_id，无法按轮次切分")
+
+    traces: List[Trace] = []
+    for turn_id in order:
+        traces.append(
+            Trace.from_raw(
+                {
+                    "turn_id": turn_id,
+                    "session_id": session_id or turn_id,
+                    "conversation": buckets[turn_id],
+                    **trace_meta,
+                }
+            )
+        )
+    return traces
