@@ -17,16 +17,20 @@ Agent 运行轨迹采集 SDK。业务方以**最小改动**接入后，SDK 自�
 
 ## 安装
 
-**业务方（从公司私有 PyPI 安装）**：
+**业务方（从 GitHub 私有仓库安装）**：
 
 ```bash
-pip install agent-trace-sdk              # 核心（仅依赖 pydantic）
-pip install "agent-trace-sdk[xlsx]"      # 需要 Excel 导出
-pip install "agent-trace-sdk[all]"       # 全部可选依赖
+pip install "git+https://github.com/pfy0/agent_trace_sdk.git@v0.1.0"
 ```
 
-一次配好 pip 源（Nexus / Artifactory）后即可，配置方法与发布流程见
-`docs/publish_private_pypi.md`。
+- 需要：机器能访问 GitHub、装了 `git`、对仓库有读权限。
+- 私有仓库还需带上凭证（SSH key 或 Token）：
+  `pip install "git+ssh://git@github.com/pfy0/agent_trace_sdk.git@v0.1.0"`
+- 装可选依赖（Excel 导出等）：
+  `pip install "agent-trace-sdk[all] @ git+https://github.com/pfy0/agent_trace_sdk.git@v0.1.0"`
+
+固定 tag 安装，版本可复现。完整说明（Token 配置、升级、离线 wheel、
+DeerFlow/uv 安装）见 `docs/distribute.md`。
 
 **SDK 开发者（源码安装）**：
 
@@ -188,17 +192,18 @@ from agent_trace.integrations.deerflow import AgentTraceMiddleware
 agent = create_agent(model=..., tools=[...], middleware=[AgentTraceMiddleware(tracer)])
 ```
 
-## 发布（私有 PyPI）
+## 发布
+
+当前用 **git tag** 分发（不依赖私有 PyPI）：
 
 ```bash
 python tools/release.py --build-only     # 只出包，产物在 dist/
-python tools/release.py                  # 构建 + 校验 + 上传私有仓库
+python tools/release.py --tag            # 构建 + 校验 + 打版本 tag 并推送
 ```
 
-上传地址与凭证走环境变量（`AGENT_TRACE_PYPI_URL` / `AGENT_TRACE_PYPI_USER` /
-`AGENT_TRACE_PYPI_PASSWORD`）或 `~/.pypirc`，不写进代码。
-完整说明（Nexus / Artifactory 建库、pip 源配置、离线安装）见
-`docs/publish_private_pypi.md`。
+业务方固定 tag 安装即可复现版本。完整说明见 `docs/distribute.md`。
+若以后公司有了 Nexus / Artifactory，同一脚本支持 `--upload` 发私有 PyPI，
+见 `docs/publish_private_pypi.md`。
 
 ## 目录结构
 
@@ -214,7 +219,7 @@ src/agent_trace/
 ├── utils.py         # 通用工具
 └── exporters/       # json / jsonl / xlsx / http / base
 examples/            # 可运行示例
-tools/release.py     # 一键构建并发布到私有 PyPI
+tools/release.py     # 一键构建 / 打 tag / 发布
 schema/              # 语言无关的 JSON Schema 契约
 ```
 
