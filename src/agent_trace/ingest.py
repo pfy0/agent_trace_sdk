@@ -96,12 +96,20 @@ def split_by_turn(
 
     traces: List[Trace] = []
     for turn_id in order:
+        steps = buckets[turn_id]
+        # 同一 turn 内第 2 条及以后的 user_query 自动标记为追问
+        seen_user_query = False
+        for step in steps:
+            if step.get("message_type") == "user_query":
+                if seen_user_query and "is_follow_up" not in step:
+                    step["is_follow_up"] = True
+                seen_user_query = True
         traces.append(
             Trace.from_raw(
                 {
                     "turn_id": turn_id,
                     "session_id": session_id or turn_id,
-                    "conversation": buckets[turn_id],
+                    "conversation": steps,
                     **trace_meta,
                 }
             )

@@ -110,6 +110,11 @@ class Step(BaseModel):
     step_no: Optional[int] = Field(default=None, ge=1, description="从 1 递增；由 SDK 统一分配")
     latency_ms: Optional[int] = Field(default=None, ge=0)
 
+    # 同一 turn_id 下的多条 user_query：第一条是初始输入，其余标记为追问
+    is_follow_up: Optional[bool] = Field(
+        default=None, description="仅 user_query 有意义；True 表示该轮内的追问/补充"
+    )
+
     # 工具相关
     tool_calls: Optional[List[ToolCall]] = None
     tool_call_id: Optional[str] = None
@@ -148,6 +153,8 @@ class Step(BaseModel):
                 raise ValueError("message_type=tool_call 时 tool_calls 必填且非空")
         if self.message_type is MessageType.TOOL_RESPONSE and not self.tool_call_id:
             raise ValueError("message_type=tool_response 时 tool_call_id 必填")
+        if self.is_follow_up and self.message_type is not MessageType.USER_QUERY:
+            raise ValueError("is_follow_up 只能出现在 message_type=user_query 的 step 上")
         return self
 
     def serializable(self) -> Dict[str, Any]:
@@ -185,18 +192,25 @@ class Trace(BaseModel):
     conversation: List[Step] = Field(default_factory=list, description="该轮的全部步骤")
 
     @model_validator(mode="after")
-    def _validate_single_turn(self) -> "Trace":
+    def _validate_turn(self) -> "Trace":
         if not self.conversation:
             raise ValueError("conversation 不能为空：一个 trace 至少包含一个 step")
 
-        # 一个 trace 只承载一轮交互，只允许一个 user_query（Q13）
+        # 边界由 turn_id 决定：同一 turn_id 下的多条 user_query 属于同一轮，
+        # 按数组顺序区分——第一条是初始输入，其余是追问/补充，不做切分。
+        # 多轮对话的切分只能通过 turn_id（见 ingest.split_by_turn）。
         user_queries = [
             step for step in self.conversation if step.message_type is MessageType.USER_QUERY
         ]
-        if len(user_queries) > 1:
+        if not user_queries:
+            raise ValueError("一个 trace 至少要包含一个 user_query（该轮的用户输入）")
+        if self.conversation[0].message_type not in (
+            MessageType.USER_QUERY,
+            MessageType.SYSTEM_PROMPT,
+        ):
             raise ValueError(
-                "一个 trace 只能承载一轮交互，但发现 %d 个 user_query；"
-                "多轮对话请按 turn_id 切分成多条 trace" % len(user_queries)
+                "trace 的第一步应为 system_prompt 或 user_query，实际是 %s"
+                % self.conversation[0].message_type.value
             )
 
         # step_no 必须从 1 起连续递增

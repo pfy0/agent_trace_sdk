@@ -8,7 +8,9 @@ Agent 运行轨迹采集 SDK。业务方以**最小改动**接入后，SDK 自�
 
 - **Trace**：一次 agent 运行 = 一个 turn = 一轮交互，是采集/校验/上报的基本单位。
 - **Step**：trace 中的一步，即 `conversation` 数组里的一条消息。
-- 一个 trace 只承载**一轮**交互（只允许一个 `user_query`），不做跨 turn 聚合。
+- 轮次边界由 `turn_id` 决定：**同一 `turn_id` 下的消息属于同一轮**，一轮内可以出现
+  多条 `user_query`（第一条是初始输入，其余是追问/补充，会标记 `is_follow_up=True`），
+  不做切分；跨轮切分只按 `turn_id`。
 
 `turn_id` 由业务方传入，作为 trace 的唯一标识；`session_id` 同样由业务方传入，
 用于关联同一会话的多个 turn。
@@ -53,7 +55,7 @@ with tracer.turn(turn_id="turn-1", session_id="sess-1") as turn:
 | 方法 | 说明 |
 | :--- | :--- |
 | `turn.record_system_prompt(content)` | 系统提示词与工具定义 |
-| `turn.record_user_query(content)` | 用户输入或反馈 |
+| `turn.record_user_query(content, follow_up=False)` | 用户输入或反馈（`follow_up=True` 标记追问） |
 | `turn.record_reasoning(content)` | 思考、规划、调度等推理过程 |
 | `turn.record_tool_call(tool_calls)` | 发起工具调用（多个调用合并为 1 个 step） |
 | `turn.record_tool_response(tool_call_id, content)` | 工具返回结果 |
@@ -93,7 +95,7 @@ def answer(question: str) -> dict:
 ## 字段契约
 
 Step 字段：`message_id`（`msg_{缩写}_{序号}`）、`role`、`message_type`、`content`、
-`timestamp`、`step_no`、`latency_ms`、`tool_calls`、`tool_call_id`，
+`timestamp`、`step_no`、`latency_ms`、`tool_calls`、`tool_call_id`、`is_follow_up`，
 以及预留的 `span_id` / `parent_span_id` / `status` / `error` / token 与 `model` 字段。
 
 Trace 字段：`turn_id`、`session_id`、`agent_name` / `agent_version`、`env`、

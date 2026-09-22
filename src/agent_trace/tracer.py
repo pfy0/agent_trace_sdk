@@ -152,6 +152,7 @@ class Turn:
         parent_span_id: Optional[str] = None,
         tags: Optional[Dict[str, str]] = None,
         meta: Optional[Dict[str, Any]] = None,
+        is_follow_up: Optional[bool] = None,
     ) -> Step:
         if self._committed:
             raise RuntimeError("该 turn 已提交，不能再追加 step")
@@ -176,6 +177,7 @@ class Turn:
             parent_span_id=parent_span_id,
             tags=tags,
             meta=meta,
+            is_follow_up=is_follow_up,
         )
         with self._lock:
             self._steps.append(step)
@@ -183,7 +185,10 @@ class Turn:
 
     # ---------- 手动埋点 API ----------
 
-    def record_user_query(self, content: str, **kwargs: Any) -> Step:
+    def record_user_query(self, content: str, follow_up: bool = False, **kwargs: Any) -> Step:
+        """记录用户输入。同一 turn 内的第 2 条起属于追问/补充，可传 follow_up=True 标记。"""
+        if follow_up and "is_follow_up" not in kwargs:
+            kwargs["is_follow_up"] = True
         return self._append(MessageType.USER_QUERY, content, kwargs.pop("timestamp", None), **kwargs)
 
     def record_reasoning(self, content: str, **kwargs: Any) -> Step:
