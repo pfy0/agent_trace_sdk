@@ -9,6 +9,7 @@ from .base import Exporter, MemoryExporter
 from .json import JsonExporter
 from .jsonl import JsonlExporter
 from .xlsx import XlsxExporter, trace_to_rows, write_xlsx
+from ..transport.exporter import HttpExporter
 
 __all__ = [
     "Exporter",
@@ -16,6 +17,7 @@ __all__ = [
     "JsonExporter",
     "JsonlExporter",
     "XlsxExporter",
+    "HttpExporter",
     "trace_to_rows",
     "write_xlsx",
 ]

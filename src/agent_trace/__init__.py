@@ -25,11 +25,13 @@ from .context import (
 )
 from .exporters import (
     Exporter,
+    HttpExporter,
     JsonExporter,
     JsonlExporter,
     MemoryExporter,
     XlsxExporter,
 )
+from .transport import TransportError
 from .ingest import import_payload, split_by_turn
 from .schemas import (
     MESSAGE_TYPE_META,
@@ -65,6 +67,8 @@ __all__ = [
     "JsonExporter",
     "JsonlExporter",
     "XlsxExporter",
+    "HttpExporter",
+    "TransportError",
     "get_current_turn",
     "get_current_span_id",
     "get_baggage",

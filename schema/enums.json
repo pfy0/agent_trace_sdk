@@ -1,0 +1,39 @@
+{
+  "message_type": {
+    "values": [
+      "system_prompt",
+      "user_query",
+      "reasoning",
+      "tool_call",
+      "tool_response",
+      "final_answer"
+    ],
+    "abbr": {
+      "system_prompt": "sys",
+      "user_query": "usr",
+      "reasoning": "rsn",
+      "tool_call": "cal",
+      "tool_response": "res",
+      "final_answer": "ans"
+    },
+    "role": {
+      "system_prompt": "system",
+      "user_query": "user",
+      "reasoning": "assistant",
+      "tool_call": "assistant",
+      "tool_response": "tool",
+      "final_answer": "assistant"
+    }
+  },
+  "role": [
+    "system",
+    "user",
+    "assistant",
+    "tool"
+  ],
+  "status": [
+    "ok",
+    "error",
+    "cancelled"
+  ]
+}
