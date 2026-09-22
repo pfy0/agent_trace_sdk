@@ -17,7 +17,12 @@
 from __future__ import annotations
 
 from .config import Config
-from .context import get_baggage, get_current_turn, set_baggage
+from .context import (
+    get_baggage,
+    get_current_span_id,
+    get_current_turn,
+    set_baggage,
+)
 from .exporters import (
     Exporter,
     JsonExporter,
@@ -61,6 +66,7 @@ __all__ = [
     "JsonlExporter",
     "XlsxExporter",
     "get_current_turn",
+    "get_current_span_id",
     "get_baggage",
     "set_baggage",
     "generate_id",

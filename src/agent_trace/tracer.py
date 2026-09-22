@@ -12,6 +12,19 @@
 
 退出 with 时自动：分配 step_no/message_id、计算 duration_ms、校验成 Trace、
 交给导出器。异常路径也会落一条终止 step 并把 status 置为 error。
+
+span 树
+-------
+每个 step 都会自动分配 `span_id`，并按当前嵌套层级填 `parent_span_id`，
+形成父子树。同一 turn 内的所有 step 共用一条 trace，跨 agent 调用（子 agent、
+子工具链）用嵌套 span 表达，而不是另开 trace —— 与 OTel / Langfuse 的惯例一致。
+
+    with turn.span("agent", name="researcher") as parent:   # 父 span
+        with turn.span("tool", name="web_search"):          # 子 span，parent_span_id 指向父
+            ...
+
+`with turn.step(...)` 与各 `record_*` 方法同样参与 span 栈：在 `turn.span(...)`
+内部记录的 step 会自动挂到当前 span 下。
 """
 from __future__ import annotations
 
@@ -158,6 +171,11 @@ class Turn:
             raise RuntimeError("该 turn 已提交，不能再追加 step")
         role = MESSAGE_TYPE_META[message_type][1]
         resolved_id = message_id or self._next_message_id(message_type)
+        # span 树：未显式指定时，span_id 新分配、parent 取当前上下文里的栈顶
+        if span_id is None:
+            span_id = generate_id("span")
+        if parent_span_id is None:
+            parent_span_id = ctx.get_current_span_id()
         step = Step(
             message_id=resolved_id,
             role=role,
@@ -227,6 +245,14 @@ class Turn:
 
     def step(self, message_type: Union[MessageType, str], **kwargs: Any) -> "_StepContext":
         return _StepContext(self, MessageType(message_type), kwargs)
+
+    def span(self, kind: str = "agent", name: Optional[str] = None, **kwargs: Any) -> "_SpanContext":
+        """开启一个嵌套 span，内部记录的 step / 子 span 都挂到它下面。
+
+        kind 为自由文本标签（如 agent / tool / llm / retrieval），供下游区分层级用途；
+        name 为该 span 的名称（如子 agent 名、工具名）。
+        """
+        return _SpanContext(self, kind=kind, name=name, kwargs=kwargs)
 
     def record_error(self, error: str, content: Optional[str] = None, **kwargs: Any) -> Step:
         """落一条终止 step，并把整个 turn 标记为 error。"""
@@ -355,6 +381,53 @@ class _StepContext:
                 self.message_type, content, None, latency_ms=latency_ms, **kwargs
             )
         return False
+
+
+class _SpanContext:
+    """嵌套 span 的上下文管理器：只维护层级，不产生 step。
+
+    进入时把新 span_id 压栈，内部记录的 step / 子 span 自动挂到它下面；
+    退出时弹栈。若传了 `record=True`，还会落一条用于标记该 span 起止的 step
+    （便于在只有 step 的下游还原层级）。
+    """
+
+    def __init__(self, turn: Turn, kind: str, name: Optional[str], kwargs: Dict[str, Any]) -> None:
+        self.turn = turn
+        self.kind = kind
+        self.name = name
+        self.kwargs = dict(kwargs)
+        self.span_id = generate_id("span")
+        self.parent_span_id: Optional[str] = None
+        self._start = None
+        self._token = None
+
+    def __enter__(self) -> "_SpanContext":
+        self._start = utc_now()
+        self.parent_span_id = ctx.get_current_span_id()
+        # span 容器自身也作为一条 step 落库，保证 parent_span_id 能解析到真实节点；
+        # 该 step 的用途由 meta.span_kind / meta.span_name 标注。
+        self.turn._append(
+            MessageType.REASONING,
+            None,
+            None,
+            span_id=self.span_id,
+            parent_span_id=self.parent_span_id,
+            meta={"span_kind": self.kind, "span_name": self.name, "span_container": True},
+        )
+        self._token = ctx.push_span(self.span_id)
+        return self
+
+    def __exit__(self, exc_type, exc, tb) -> bool:
+        if self._token is not None:
+            ctx.reset_span(self._token)
+            self._token = None
+        return False
+
+    @property
+    def latency_ms(self) -> Optional[int]:
+        if self._start is None:
+            return None
+        return int((utc_now() - self._start).total_seconds() * 1000)
 
 
 class Tracer:

@@ -67,6 +67,28 @@ OpenAI 风格的完整对象、以及它们的列表。
 
 `with turn.step(message_type)` 会自动记录该步的起止时间与 `latency_ms`。
 
+## Span 树（子 agent / 子工具链）
+
+同一个 turn 内的所有步骤共用一条 trace。子 agent、子工具链用**嵌套 span**表达，
+不另开 trace —— 与 OTel / Langfuse 的惯例一致：
+
+```python
+with tracer.turn(turn_id="t-1", session_id="s-1") as turn:
+    turn.record_user_query("调研今日 AI 新闻并写简报")
+    with turn.span("agent", name="researcher"):        # 子 agent
+        turn.record_reasoning("开始检索……")
+        with turn.span("tool", name="web_search"):     # 子工具
+            turn.record_tool_call([("web_search", {"q": "AI"})])
+            turn.record_tool_response(tool_call_id="call_1", content="...")
+```
+
+- 每个 step 自动分配 `span_id`，`parent_span_id` 指向当前嵌套层级的父 span；
+  顶层 step 的 `parent_span_id` 为 `None`。
+- span 容器自身会落一条标记 step（`meta.span_kind` / `meta.span_name` /
+  `meta.span_container=True`），保证 `parent_span_id` 能解析到真实节点。
+- span 栈用 `contextvars` 实现，asyncio 并发任务 / 线程各持一份拷贝，
+  并发子任务不会互相串层。
+
 ## 装饰器
 
 ```python
@@ -96,7 +118,7 @@ def answer(question: str) -> dict:
 
 Step 字段：`message_id`（`msg_{缩写}_{序号}`）、`role`、`message_type`、`content`、
 `timestamp`、`step_no`、`latency_ms`、`tool_calls`、`tool_call_id`、`is_follow_up`，
-以及预留的 `span_id` / `parent_span_id` / `status` / `error` / token 与 `model` 字段。
+以及 `span_id` / `parent_span_id`（span 树）和 `status` / `error` / token 与 `model` 字段。
 
 Trace 字段：`turn_id`、`session_id`、`agent_name` / `agent_version`、`env`、
 `started_at` / `ended_at` / `duration_ms`、`status` / `error`、token 用量、
@@ -124,6 +146,7 @@ examples/            # 可运行示例
 python examples/manual_api.py    # 手动埋点最小闭环 + 三种导出
 python examples/decorator.py     # 装饰器与异常路径
 python examples/import_data.py   # 导入现成数据、多轮切分
+python examples/nested_spans.py  # 嵌套 span 树（子 agent / 子工具链）
 ```
 
 ## 环境变量

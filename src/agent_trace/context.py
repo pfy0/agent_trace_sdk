@@ -21,6 +21,12 @@ _baggage: contextvars.ContextVar[Dict[str, Any]] = contextvars.ContextVar(
     "agent_trace_baggage", default={}
 )
 
+# 当前 span 栈（不可变元组，栈顶在末尾）。用 contextvar 而非实例属性，
+# 保证 asyncio 并发任务 / 线程各持一份拷贝，span 层级不会互相污染。
+_span_stack: contextvars.ContextVar[tuple] = contextvars.ContextVar(
+    "agent_trace_span_stack", default=()
+)
+
 
 def get_current_turn() -> Optional["Turn"]:
     """返回当前上下文里的 Turn，没有则 None。"""
@@ -51,3 +57,24 @@ def set_baggage(**items: Any) -> contextvars.Token:
 
 def reset_baggage(token: contextvars.Token) -> None:
     _baggage.reset(token)
+
+
+def get_span_stack() -> tuple:
+    """返回当前 span 栈（元组，栈顶在末尾）。"""
+    return _span_stack.get()
+
+
+def get_current_span_id() -> Optional[str]:
+    """返回当前 span_id，没有则 None（即顶层）。"""
+    stack = _span_stack.get()
+    return stack[-1] if stack else None
+
+
+def push_span(span_id: str) -> contextvars.Token:
+    """把 span_id 压栈，返回 token 供 pop 用。"""
+    return _span_stack.set(_span_stack.get() + (span_id,))
+
+
+def reset_span(token: contextvars.Token) -> None:
+    """恢复到压栈前的状态。"""
+    _span_stack.reset(token)
