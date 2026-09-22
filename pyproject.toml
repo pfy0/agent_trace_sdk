@@ -31,7 +31,7 @@ dependencies = [
 [project.optional-dependencies]
 xlsx = ["openpyxl>=3.1"]
 http = ["httpx>=0.27"]
-deerflow = ["langchain>=0.3"]
+deerflow = ["langchain>=1.0"]
 dev = ["build>=1.2", "twine>=5.0", "openpyxl>=3.1", "httpx>=0.27"]
 all = ["openpyxl>=3.1", "httpx>=0.27"]
 
