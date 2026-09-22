@@ -145,7 +145,8 @@ plugins:
 | DeerFlow / LangChain | → step |
 | :--- | :--- |
 | `SystemMessage` | `system_prompt`（随 thread 固定，每轮采一次） |
-| `HumanMessage` | `user_query`（同轮第 2 条起自动标 `is_follow_up`） |
+| `HumanMessage`（真实用户输入） | `user_query`（同轮第 2 条起自动标 `is_follow_up`） |
+| `HumanMessage`（框架注入，带 `hide_from_ui`） | 不算 `user_query`，记为 `reasoning` 并标 `meta.deerflow_injected` |
 | `AIMessage.content`（带 `tool_calls`） | `reasoning` |
 | `AIMessage.content`（收尾那条） | `final_answer` |
 | `AIMessage.tool_calls`（多个） | 合并为 **1 个** `tool_call` step |
@@ -153,7 +154,16 @@ plugins:
 
 - `turn_id` 取 DeerFlow 的 `run_id`，`session_id` 取 `thread_id`；同一 thread 的多轮
   run 各自产出一条 trace，共享 `session_id`。
-- 初始 state 里携带的历史消息不会重复采集（以最后一条 human 消息为界）。
+- **澄清续跑自动合并**：`ask_clarification` 会中断 run，用户回答后 DeerFlow 另起一个
+  `run_id` 继续。此时不新开 trace，而是并入同一轮的 trace（`user_query` 标
+  `is_follow_up` + `meta.clarification_answer`），`turn_id` 沿用最初提问那轮，
+  保证「提问 → 反问 → 澄清 → 完成」是一条完整 trace。若用户放弃澄清直接重新提问，
+  暂存的澄清轮会被兜底提交，数据不丢。
+- **框架注入的消息不记为用户输入**：带 `hide_from_ui` 的 `HumanMessage`（memory 画像、
+  动态上下文提醒、待办提醒等）记为 `reasoning` 并标 `meta.deerflow_injected`
+  （值为 `injected` / `dynamic_context`）。判定规则与 DeerFlow 自身的
+  `_is_genuine_user_message` 一致：澄清答复虽带 `hide_from_ui`，但仍属真实用户输入。
+- 初始 state 里携带的历史消息不会重复采集（以最后一条真实用户消息为界）。
 - 无 langchain 的环境下本模块仍可 import（中间件退化为普通类，便于纯逻辑单测）。
 
 也支持手动挂载：

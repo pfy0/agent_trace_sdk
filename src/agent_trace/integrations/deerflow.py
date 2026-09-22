@@ -110,6 +110,47 @@ def _tool_calls_of(message: Any) -> List[Dict[str, Any]]:
     return calls
 
 
+def _additional_kwargs(message: Any) -> Dict[str, Any]:
+    kwargs = getattr(message, "additional_kwargs", None)
+    return kwargs if isinstance(kwargs, dict) else {}
+
+
+def is_clarification_answer(message: Any) -> bool:
+    """是否为对 ask_clarification 的回答（结构化 human_input_response）。"""
+    raw = _additional_kwargs(message).get("human_input_response")
+    if not isinstance(raw, dict):
+        return False
+    if raw.get("version") != 1 or raw.get("kind") != "human_input_response":
+        return False
+    return bool(raw.get("value")) and bool(raw.get("request_id"))
+
+
+def is_genuine_user_message(message: Any) -> bool:
+    """是否为真实的用户输入，而非框架注入的 human 消息。
+
+    与 DeerFlow 的 `_is_genuine_user_message` 保持同一语义：
+    `hide_from_ui` 标记的是内部注入（memory 画像、动态上下文提醒、
+    待办提醒、摘要等），但澄清答复同样带该标记且属于真实用户输入，
+    因此只在「没有有效 human_input_response」时才判定为注入。
+    """
+    if _role_of(message) != "human":
+        return False
+    kwargs = _additional_kwargs(message)
+    if kwargs.get("hide_from_ui") and not is_clarification_answer(message):
+        return False
+    return True
+
+
+def _injected_label(message: Any) -> Optional[str]:
+    """给内部注入的 human 消息一个来源标签，便于下游区分。"""
+    kwargs = _additional_kwargs(message)
+    if kwargs.get("dynamic_context_reminder"):
+        return "dynamic_context"
+    if kwargs.get("hide_from_ui"):
+        return "injected"
+    return None
+
+
 def _message_key(message: Any) -> str:
     """消息去重键：优先用 LangChain 的 message.id，退化到内容指纹。"""
     mid = getattr(message, "id", None)
@@ -144,6 +185,9 @@ class AgentTraceMiddleware(_AgentMiddleware):
         self.subagent_span = subagent_span
         # 每轮 run 的状态：key 为 run 标识，value 为该轮的采集状态
         self._turns: Dict[str, Dict[str, Any]] = {}
+        # 每个 session 最近一次采集的 turn，用于把澄清续跑并入同一轮：
+        # session_id -> {"turn": Turn, "turn_key": str}
+        self._last_turn_by_session: Dict[str, Dict[str, Any]] = {}
 
     # ---- 内部：定位/创建当前轮的采集状态 ----
 
@@ -168,40 +212,71 @@ class AgentTraceMiddleware(_AgentMiddleware):
         if key is None or key in self._turns:
             return
         context = self._runtime_context(runtime)
-        turn_id = context.get("run_id") or key
-        session_id = context.get("thread_id") or turn_id
-
-        turn = self.tracer.turn(turn_id=str(turn_id), session_id=str(session_id))
-        turn.__enter__()  # 手动进入，生命周期由中间件控制（after_agent 提交）
-        entry: Dict[str, Any] = {
-            "turn": turn,
-            "seen": set(),
-            "model_name": context.get("model_name") or context.get("model"),
-        }
+        run_id = context.get("run_id") or key
+        session_id = context.get("thread_id") or run_id
 
         messages = []
         getter = getattr(state, "get", None)
         if callable(getter):
             messages = list(getter("messages", []) or [])
 
-        # 一轮 run 的初始 state 里同时带着「历史」和「本轮输入」：DeerFlow 会把
-        # 本次用户输入作为最后一条 HumanMessage 放进初始 state。因此以
-        # 「最后一条 human 消息」为界——它之前的是历史（标记为已见，不重复采集），
-        # 它本身及其之后的消息属于本轮，交给 after_model 正常处理。
-        last_human = None
+        # 本轮用户输入：最后一条「真实用户消息」（排除框架注入的 human 消息）。
+        # 澄清答复（human_input_response）也属于真实用户输入，只是语义上是追问。
+        last_genuine_human = None
         for index, message in enumerate(messages):
-            if _role_of(message) == "human":
-                last_human = index
+            if is_genuine_user_message(message):
+                last_genuine_human = index
 
-        history_end = last_human if last_human is not None else len(messages)
-        for message in messages[:history_end]:
+        # 澄清续跑判定：DeerFlow 的 ask_clarification 会中断 run，用户回答后
+        # 另起一个 run_id 继续。此时不应新开 trace，而要并入同 session 的上一轮，
+        # 否则「提问 -> 反问 -> 澄清 -> 完成」会被错误拆成两条 trace。
+        continuation = False
+        if last_genuine_human is not None:
+            continuation = is_clarification_answer(messages[last_genuine_human])
+        previous = self._last_turn_by_session.get(str(session_id))
+        if continuation and previous is not None and not previous["turn"]._committed:
+            turn = previous["turn"]
+            entry: Dict[str, Any] = {
+                "turn": turn,
+                "seen": set(),
+                "model_name": context.get("model_name") or context.get("model"),
+                # 续跑：不重采 system_prompt
+                "system_prompt_done": True,
+            }
+            # 历史消息标为已见（不重复采集）；但**澄清答复本身是本轮的用户输入**，
+            # 必须保留给 after_model 采集，因此从已见集合里排除它及其之后的消息。
+            for message in messages[: last_genuine_human]:
+                entry["seen"].add(_message_key(message))
+            self._turns[key] = entry
+            return
+
+        turn = self.tracer.turn(turn_id=str(run_id), session_id=str(session_id))
+        turn.__enter__()  # 手动进入，生命周期由中间件控制（after_agent 提交）
+        entry: Dict[str, Any] = {
+            "turn": turn,
+            "seen": set(),
+            "model_name": context.get("model_name") or context.get("model"),
+            "system_prompt_done": False,
+        }
+
+        # 一轮 run 的初始 state 里同时带着「历史」和「本轮输入」：DeerFlow 会把
+        # 本次用户输入作为最后一条真实用户消息放进初始 state。以它（或其后的
+        # AI 消息）为界——之前的属于历史，标记为已见避免重复采集；它本身及其
+        # 之后的消息属于本轮，交给 after_model 正常处理。
+        boundary = last_genuine_human
+        if boundary is None:
+            # 没有真实用户输入（例如纯系统触发的 run）：整体按历史处理
+            boundary = len(messages)
+
+        for message in messages[:boundary]:
             entry["seen"].add(_message_key(message))
 
         # 系统提示词属于历史，却是本轮上下文的一部分，单独采集一次（放在最前）。
-        for message in messages[:history_end]:
+        for message in messages[:boundary]:
             if _role_of(message) == "system":
                 turn.record_system_prompt(_text_of(message), meta={"historical": True})
                 break
+        entry["system_prompt_done"] = True
         self._turns[key] = entry
 
     def _consume_messages(self, state: Any, runtime: Any) -> None:
@@ -229,11 +304,24 @@ class AgentTraceMiddleware(_AgentMiddleware):
         text = _text_of(message)
 
         if role == "human":
-            # 同轮内第 2 条及以后视为追问（SDK 会自动补 message_id）
-            is_follow_up = any(
+            if not is_genuine_user_message(message):
+                # 框架注入的 human 消息（memory 画像、动态上下文提醒、待办提醒等）
+                # 不是用户输入：单独记一条带来源标记的 step，不算 user_query。
+                label = _injected_label(message) or "injected"
+                if text.strip():
+                    turn._append(
+                        MessageType.REASONING,
+                        text,
+                        None,
+                        meta={"deerflow_injected": label},
+                    )
+                return
+            # 澄清答复与同轮内第 2 条起的用户输入都算追问
+            is_follow_up = is_clarification_answer(message) or any(
                 step.message_type is MessageType.USER_QUERY for step in turn.steps
             )
-            turn.record_user_query(text, follow_up=is_follow_up)
+            meta = {"clarification_answer": True} if is_clarification_answer(message) else None
+            turn.record_user_query(text, follow_up=is_follow_up, meta=meta)
             return
 
         if role == "system":
@@ -311,6 +399,18 @@ class AgentTraceMiddleware(_AgentMiddleware):
             if step.meta and "pending_final" in step.meta:
                 step.meta = {k: v for k, v in step.meta.items() if k != "pending_final"} or None
 
+        # 暂存未提交的澄清轮：其最后一步是 ask_clarification 工具调用，
+        # 说明 DeerFlow 正中断等待用户回答，后续 run 会带着澄清答复续跑。
+        # 此时不能提交，否则「提问 -> 反问 -> 澄清 -> 完成」被拆成两条 trace。
+        if self._awaits_clarification(turn):
+            self._last_turn_by_session[turn.session_id] = {"turn": turn, "turn_key": key}
+            self._turns.pop(key, None)
+            return
+
+        # 本轮结束（未在等澄清）：把同 session 暂存的澄清轮先提交掉，
+        # 避免用户放弃澄清、直接重新提问时那部分数据丢失。
+        self._flush_parked_turn(turn.session_id)
+
         if not promoted and (last is None or last.message_type is not MessageType.FINAL_ANSWER):
             # 本轮没有产出可见回答（例如异常中断）：补一条终止 step
             turn.record_final_answer(
@@ -319,6 +419,28 @@ class AgentTraceMiddleware(_AgentMiddleware):
                 error=error,
             )
 
+        turn.__exit__(None, None, None)
+
+    @staticmethod
+    def _awaits_clarification(turn: Turn) -> bool:
+        """本轮最后一步是否为 ask_clarification（DeerFlow 借此中断等待用户输入）。"""
+        last = turn.steps[-1] if turn.steps else None
+        if last is None or last.message_type is not MessageType.TOOL_CALL:
+            return False
+        for call in last.tool_calls or []:
+            function = call.function or {}
+            if function.get("name") == "ask_clarification":
+                return True
+        return False
+
+    def _flush_parked_turn(self, session_id: str) -> None:
+        """提交某 session 暂存的澄清轮（用户未续跑时兜底提交）。"""
+        parked = self._last_turn_by_session.pop(session_id, None)
+        if parked is None:
+            return
+        turn: Turn = parked["turn"]
+        if turn._committed:
+            return
         turn.__exit__(None, None, None)
 
     # ---- AgentMiddleware 钩子（同步） ----
