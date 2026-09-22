@@ -1,7 +1,6 @@
-# 包的获取与发布（方案 D：GitHub 私有仓库安装）
+# 包的获取与发布
 
-公司没有 Nexus / Artifactory，所以不走私有 PyPI。包的唯一分发渠道是
-**GitHub 私有仓库**，业务方用 `pip install git+...` 安装。
+包通过 **GitHub 私有仓库**分发，业务方用 `pip install git+...` 安装。
 
 ```
 SDK 维护者                          GitHub 私有仓库                业务方环境
@@ -151,14 +150,3 @@ pip install --no-index --find-links=./wheels ./agent_trace_sdk-0.1.0-py3-none-an
 ```
 
 ---
-
-## 五、与私有 PyPI 的关系
-
-本仓库同时保留了私有 PyPI 的能力（`--upload` + `docs/publish_private_pypi.md`）。
-以后公司要是有了 Nexus / Artifactory，配好环境变量后：
-
-```powershell
-python tools/release.py --upload
-```
-
-业务方就能回到一行 `pip install agent-trace-sdk`。两条路并存，按现状选一条即可。

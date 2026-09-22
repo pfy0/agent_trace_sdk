@@ -202,8 +202,6 @@ python tools/release.py --tag            # 构建 + 校验 + 打版本 tag 并�
 ```
 
 业务方固定 tag 安装即可复现版本。完整说明见 `docs/distribute.md`。
-若以后公司有了 Nexus / Artifactory，同一脚本支持 `--upload` 发私有 PyPI，
-见 `docs/publish_private_pypi.md`。
 
 ## 目录结构
 
