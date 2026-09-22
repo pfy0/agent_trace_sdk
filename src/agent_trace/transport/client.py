@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Dict, Optional, Sequence, Tuple
 from urllib import error as urlerror
 from urllib import request as urlrequest
 

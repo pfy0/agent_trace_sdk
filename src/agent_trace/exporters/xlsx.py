@@ -1,17 +1,12 @@
 """XLSX 导出器：把 trace 的 conversation 展平成一行一个 step 的 Excel 表。
 
-列顺序与表头沿用离线脚本 `extract_steps.py`，保证历史 Excel 可比对。
-
-`split_tool_calls` 开关：
-- False（默认）：按新契约，一条 tool_call 消息 = 一行，多个调用放同一格。
-- True：沿用旧行为，含 N 个调用的 tool_call 拆成 N 行（message_id 相同），
-  便于与历史 Excel 逐格比对。
+一条 tool_call 消息 = 一行，多个调用放在同一格里（JSON 数组）。
 """
 from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Union
 
 from ..schemas import MessageType, Trace
 from .base import Exporter
@@ -48,7 +43,7 @@ def to_cell(value: Any) -> Any:
     return json.dumps(value, ensure_ascii=False, indent=2)
 
 
-def trace_to_rows(trace: Trace, split_tool_calls: bool = False) -> List[Dict[str, Any]]:
+def trace_to_rows(trace: Trace) -> List[Dict[str, Any]]:
     """把一条 trace 展平成表格行。step_no 从 1 重新排，保持连续。"""
     rows: List[Dict[str, Any]] = []
 
@@ -70,11 +65,7 @@ def trace_to_rows(trace: Trace, split_tool_calls: bool = False) -> List[Dict[str
     for step in trace.conversation:
         if step.message_type is MessageType.TOOL_CALL:
             calls = [call.model_dump(mode="json", exclude_none=True) for call in step.tool_calls or []]
-            if split_tool_calls:
-                for call in calls:
-                    emit(step, call, call.get("id"))
-            else:
-                emit(step, calls, step.tool_call_id)
+            emit(step, calls, step.tool_call_id)
             continue
         emit(step, None, step.tool_call_id)
 
@@ -125,17 +116,15 @@ class XlsxExporter(Exporter):
     def __init__(
         self,
         path: Union[str, Path],
-        split_tool_calls: bool = False,
         flush_every: int = 1,
     ) -> None:
         self.path = Path(path)
-        self.split_tool_calls = split_tool_calls
         self.flush_every = max(1, int(flush_every))
         self._rows: List[Dict[str, Any]] = []
         self._pending = 0
 
     def export(self, trace: Trace) -> None:
-        self._rows.extend(trace_to_rows(trace, split_tool_calls=self.split_tool_calls))
+        self._rows.extend(trace_to_rows(trace))
         self._pending += 1
         if self._pending >= self.flush_every:
             self.flush()

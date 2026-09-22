@@ -38,7 +38,6 @@ from .config import Config
 from .schemas import (
     MESSAGE_TYPE_META,
     MessageType,
-    Role,
     Status,
     Step,
     ToolCall,

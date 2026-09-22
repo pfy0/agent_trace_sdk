@@ -1,11 +1,10 @@
-"""离线导入：把现成的 messages / conversation 数据一次性喂给 SDK。
+"""离线导入：把多轮 messages 数据按 turn_id 切分成多条 trace。
 
-用于「业务方已经攒好了一轮对话」或「批量导入历史数据」的场景；
-实时采集请用 `Tracer.turn()`。多轮数据会按 turn_id 自动切分成多条 trace。
+用于「批量导入历史数据」的场景；实时采集请用 `Tracer.turn()`。
 """
 from __future__ import annotations
 
-from typing import Any, Dict, Iterable, List, Optional, Sequence
+from typing import Any, Dict, List, Optional
 
 from .schemas import Trace
 
@@ -28,40 +27,6 @@ def _extract_steps(payload: Any, depth: int = 0, max_depth: int = 8) -> Optional
             if found is not None:
                 return found
     return None
-
-
-def import_payload(
-    payload: Any,
-    turn_id: Optional[str] = None,
-    session_id: Optional[str] = None,
-    **trace_meta: Any,
-) -> List[Trace]:
-    """导入单轮数据，返回一条 trace 的列表。
-
-    若 payload 里带 turn_id / session_id，优先使用；否则用传入值或自动生成。
-    """
-    steps = _extract_steps(payload)
-    if steps is None:
-        raise ValueError("未在 payload 中找到 conversation / messages 数组")
-
-    if isinstance(payload, dict):
-        turn_id = payload.get("turn_id") or turn_id
-        session_id = payload.get("session_id") or session_id
-        for key in ("agent_name", "agent_version", "env", "model", "tags", "meta"):
-            if key in payload and key not in trace_meta:
-                trace_meta[key] = payload[key]
-
-    from .schemas import generate_id
-
-    trace = Trace.from_raw(
-        {
-            "turn_id": turn_id or generate_id("turn"),
-            "session_id": session_id or generate_id("sess"),
-            "conversation": steps,
-            **trace_meta,
-        }
-    )
-    return [trace]
 
 
 def split_by_turn(

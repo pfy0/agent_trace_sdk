@@ -125,11 +125,11 @@ def answer(question: str) -> dict:
 | :--- | :--- |
 | `JsonExporter(path)` | 单个 JSON 文件，顶层是 trace 数组 |
 | `JsonlExporter(path)` | 一行一个 step 的裸 JSON |
-| `XlsxExporter(path, split_tool_calls=False)` | 一行一个 step 的 Excel（表头对齐 `extract_steps.py`） |
+| `XlsxExporter(path)` | 一行一个 step 的 Excel |
 | `MemoryExporter()` | 只留在内存，便于测试 |
+| `HttpExporter(endpoint, ...)` | 非阻塞上报到采集服务，支持重试与失败落盘 |
 
-`split_tool_calls=True` 时恢复离线脚本的旧行为（一条 tool_call 拆成 N 行），
-用于与历史 Excel 逐格比对；默认 `False` 按新契约一条消息一行。
+Excel 里一条 tool_call 消息占一行，多个调用放在同一格（JSON 数组）。
 
 ## 字段契约
 
@@ -216,7 +216,6 @@ src/agent_trace/
 ├── ingest.py        # 离线导入与多轮按 turn_id 切分
 ├── integrations/    # 框架适配（deerflow.py）
 ├── transport/       # HTTP 上报：队列 / 重试 / 失败落盘
-├── utils.py         # 通用工具
 └── exporters/       # json / jsonl / xlsx / http / base
 examples/            # 可运行示例
 tools/release.py     # 一键构建 / 打 tag / 发布
@@ -241,6 +240,8 @@ python examples/deerflow_integration.py  # DeerFlow 中间件集成
 | `AGENT_TRACE_ENV` | 运行环境 | 空 |
 | `AGENT_TRACE_ENABLED` | 采集总开关 | `true` |
 | `AGENT_TRACE_DEBUG` | 导出器异常是否向上抛 | `false` |
+
+`AGENT_TRACE_AGENT_VERSION` 同样可用。
 
 ## 说明
 

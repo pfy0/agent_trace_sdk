@@ -1,4 +1,4 @@
-"""导入现成数据：单轮导入 + 多轮按 turn_id 切分。"""
+"""导入现成数据：多轮 messages 按 turn_id 切分成多条 trace。"""
 from __future__ import annotations
 
 import json

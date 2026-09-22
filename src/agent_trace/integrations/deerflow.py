@@ -38,8 +38,6 @@ except Exception:  # pragma: no cover - 无 langchain 时的退化路径
 
 _KNOWN_ROLES = ("human", "ai", "tool", "system")
 
-_KNOWN_ROLES = ("human", "ai", "tool", "system")
-
 
 def _role_of(message: Any) -> Optional[str]:
     """返回消息类型标签：human / ai / tool / system / None。

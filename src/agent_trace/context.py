@@ -6,7 +6,7 @@
 from __future__ import annotations
 
 import contextvars
-from typing import TYPE_CHECKING, Any, Dict, Optional
+from typing import TYPE_CHECKING, Optional
 
 if TYPE_CHECKING:  # pragma: no cover
     from .tracer import Turn
@@ -14,11 +14,6 @@ if TYPE_CHECKING:  # pragma: no cover
 # 当前 turn
 _current_turn: contextvars.ContextVar[Optional["Turn"]] = contextvars.ContextVar(
     "agent_trace_current_turn", default=None
-)
-
-# agent 级 baggage，随 trace 一起带上，便于业务方透传租户 / 用户等信息
-_baggage: contextvars.ContextVar[Dict[str, Any]] = contextvars.ContextVar(
-    "agent_trace_baggage", default={}
 )
 
 # 当前 span 栈（不可变元组，栈顶在末尾）。用 contextvar 而非实例属性，
@@ -50,25 +45,6 @@ def reset_current_turn(token: contextvars.Token) -> None:
         _current_turn.reset(token)
     except ValueError:
         _current_turn.set(None)
-
-
-def get_baggage() -> Dict[str, Any]:
-    """返回当前上下文的 baggage 副本。"""
-    return dict(_baggage.get())
-
-
-def set_baggage(**items: Any) -> contextvars.Token:
-    """合并写入 baggage，返回 token。"""
-    merged = dict(_baggage.get())
-    merged.update(items)
-    return _baggage.set(merged)
-
-
-def reset_baggage(token: contextvars.Token) -> None:
-    try:
-        _baggage.reset(token)
-    except ValueError:
-        _baggage.set({})
 
 
 def get_span_stack() -> tuple:

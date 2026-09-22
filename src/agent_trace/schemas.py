@@ -52,11 +52,6 @@ MESSAGE_TYPE_META: Dict[MessageType, tuple] = {
     MessageType.FINAL_ANSWER: ("ans", Role.ASSISTANT),
 }
 
-# 缩写 -> message_type，用于反查
-ABBR_TO_MESSAGE_TYPE: Dict[str, MessageType] = {
-    abbr: message_type for message_type, (abbr, _) in MESSAGE_TYPE_META.items()
-}
-
 MESSAGE_ID_PATTERN = re.compile(r"^msg_(sys|usr|rsn|cal|res|ans)_\d+$")
 
 

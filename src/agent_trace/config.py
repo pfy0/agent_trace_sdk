@@ -23,16 +23,6 @@ def _env_bool(name: str, default: bool) -> bool:
     return raw.strip().lower() in {"1", "true", "yes", "on"}
 
 
-def _env_int(name: str, default: int) -> int:
-    raw = _env(name)
-    if raw is None:
-        return default
-    try:
-        return int(raw)
-    except ValueError:
-        return default
-
-
 class Config(BaseModel):
     """SDK 全局配置。所有字段都有默认值，可只用环境变量启动。"""
 
@@ -49,11 +39,6 @@ class Config(BaseModel):
     # 导出/上报
     exporters: Optional[list] = Field(default=None)
 
-    # 加工层（M4 预留）
-    sanitize_enabled: bool = Field(default=True)
-    max_field_bytes: int = Field(default=64 * 1024)
-    truncate_enabled: bool = Field(default=True)
-
     # 运行期开关
     enabled: bool = Field(default=True)
     debug: bool = Field(default=False)
@@ -67,9 +52,6 @@ class Config(BaseModel):
             "env": _env("ENV"),
             "enabled": _env_bool("ENABLED", True),
             "debug": _env_bool("DEBUG", False),
-            "sanitize_enabled": _env_bool("SANITIZE", True),
-            "truncate_enabled": _env_bool("TRUNCATE", True),
-            "max_field_bytes": _env_int("MAX_FIELD_BYTES", 64 * 1024),
         }
         defaults.update(overrides)
         return cls.model_validate(defaults)

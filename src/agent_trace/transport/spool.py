@@ -3,11 +3,10 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 import time
 import uuid
 from pathlib import Path
-from typing import Any, Dict, Iterator, List, Optional, Sequence, Union
+from typing import Any, Dict, List, Optional, Sequence, Union
 
 logger = logging.getLogger("agent_trace.transport")
 

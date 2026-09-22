@@ -32,7 +32,7 @@ def main() -> None:
             memory,
             JsonExporter(OUTPUT_DIR / "traces.json"),
             JsonlExporter(OUTPUT_DIR / "steps.jsonl"),
-            XlsxExporter(OUTPUT_DIR / "steps.xlsx", split_tool_calls=False),
+            XlsxExporter(OUTPUT_DIR / "steps.xlsx"),
         ],
     )
 

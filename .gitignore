@@ -35,3 +35,4 @@ Thumbs.db
 # SDK 运行期落盘数据
 spool/
 *.jsonl
+output/

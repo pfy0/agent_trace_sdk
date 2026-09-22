@@ -3,9 +3,8 @@ from __future__ import annotations
 
 import logging
 import threading
-import time
 from collections import deque
-from typing import Any, Callable, Dict, List, Optional, Sequence
+from typing import Any, Callable, Dict, List, Optional
 
 from .client import HttpTransport, TransportError
 from .spool import SpoolStore
