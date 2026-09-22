@@ -20,16 +20,17 @@ SAMPLE = [
 
 def main() -> None:
     memory = MemoryExporter()
-    tracer = Tracer(agent_name="importer", exporters=[memory])
+    tracer = Tracer(agent_id="agent-importer", exporters=[memory])
 
-    traces = split_by_turn({"messages": SAMPLE}, session_id="sess-import", agent_name="importer")
+    traces = split_by_turn({"messages": SAMPLE}, session_id="sess-import", agent_id="agent-importer")
     for trace in traces:
         tracer._emit(trace)
 
     for trace in memory.traces:
         payload = trace.serializable()
-        print("turn_id:", payload["turn_id"], "| steps:", len(payload["conversation"]))
-        print(json.dumps(payload["conversation"], ensure_ascii=False)[:160])
+        print("turn_id:", payload["turn_id"], "| turn_no:", payload["turn_no"],
+              "| steps:", len(payload["conversations"]))
+        print(json.dumps(payload["conversations"], ensure_ascii=False)[:160])
 
     assert Path(__file__).exists()
 

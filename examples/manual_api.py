@@ -25,9 +25,8 @@ def main() -> None:
     memory = MemoryExporter()
 
     tracer = Tracer(
-        agent_name="news-daily",
-        agent_version="1.0.0",
-        env="local",
+        agent_id="agent-demo-1",
+        app_name="news-daily",
         exporters=[
             memory,
             JsonExporter(OUTPUT_DIR / "traces.json"),
@@ -36,7 +35,7 @@ def main() -> None:
         ],
     )
 
-    with tracer.turn(turn_id="turn-demo-1", session_id="sess-demo-1") as turn:
+    with tracer.turn(turn_id="turn-demo-1", session_id="sess-demo-1", turn_no=1) as turn:
         turn.record_user_query("查看今日 ai 新闻热点")
         turn.record_reasoning("先调用搜索引擎拿到今日 AI 新闻……")
 
@@ -57,9 +56,10 @@ def main() -> None:
 
     trace = memory.traces[0].serializable()
     print("turn_id    :", trace["turn_id"])
-    print("status     :", trace["status"])
-    print("steps      :", len(trace["conversation"]))
-    for step in trace["conversation"]:
+    print("turn_no    :", trace["turn_no"])
+    print("completed  :", trace["completed"], "| partial:", trace["partial"])
+    print("steps      :", len(trace["conversations"]))
+    for step in trace["conversations"]:
         print("  %d. %-14s %-14s latency_ms=%s"
               % (step["step_no"], step["message_id"], step["message_type"], step.get("latency_ms")))
     print("导出文件   :", ", ".join(sorted(os.listdir(OUTPUT_DIR))))

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import logging
 import threading
+import time
 from collections import deque
 from typing import Any, Callable, Dict, List, Optional
 
@@ -41,6 +42,9 @@ class BatchQueue:
         self._wake = threading.Event()
         self._stop = threading.Event()
         self._thread: Optional[threading.Thread] = None
+        # spool 补发节流：失败后退避，避免网络未恢复时反复重试
+        self._resend_backoff = self.flush_interval
+        self._next_resend_at = 0.0
 
         # 统计
         self.dropped = 0
@@ -84,6 +88,8 @@ class BatchQueue:
             self._wake.clear()
             try:
                 self.flush_once()
+                # 顺带把上次网络失败落盘的批次补发出去（恢复后自动补齐）
+                self._maybe_resend_spooled()
             except Exception as exc:  # 后台线程绝不能因异常退出
                 logger.exception("flush 线程异常: %s", exc)
                 if self.on_error:
@@ -114,6 +120,19 @@ class BatchQueue:
         return batch
 
     # ---------- spool 补发 ----------
+
+    def _maybe_resend_spooled(self) -> None:
+        """到点且有积压时补发一次；失败按 flush_interval 指数退避（上限 60s）。"""
+        if self.spool is None or not self.spool.pending():
+            return
+        if time.monotonic() < self._next_resend_at:
+            return
+        if self.resend_spooled() > 0 or not self.spool.pending():
+            self._resend_backoff = self.flush_interval
+            self._next_resend_at = 0.0
+            return
+        self._next_resend_at = time.monotonic() + self._resend_backoff
+        self._resend_backoff = min(self._resend_backoff * 2, 60.0)
 
     def resend_spooled(self) -> int:
         """把 spool 里积压的批次补发出去；返回成功补发的条数。"""

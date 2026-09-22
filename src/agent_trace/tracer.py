@@ -2,34 +2,28 @@
 
 用法：
 
-    tracer = Tracer(agent_name="news-daily", env="prod")
+    tracer = Tracer(agent_id="agent-demo")
     with tracer.turn(turn_id="t-1", session_id="s-1") as turn:
         turn.record_user_query("查看今日ai新闻热点")
         turn.record_reasoning("先搜索今日 AI 新闻……")
-        turn.record_tool_call(name="web_search", arguments={"count": 8})
+        turn.record_tool_call([("web_search", {"count": 8})])
         turn.record_tool_response(tool_call_id="call_1", content="{...}")
         turn.record_final_answer("今日要闻……")
 
 退出 with 时自动：分配 step_no/message_id、计算 duration_ms、校验成 Trace、
-交给导出器。异常路径也会落一条终止 step 并把 status 置为 error。
+交给导出器。异常路径也会落一条终止 step 并把 completed 置为 false。
 
-span 树
--------
-每个 step 都会自动分配 `span_id`，并按当前嵌套层级填 `parent_span_id`，
-形成父子树。同一 turn 内的所有 step 共用一条 trace，跨 agent 调用（子 agent、
-子工具链）用嵌套 span 表达，而不是另开 trace —— 与 OTel / Langfuse 的惯例一致。
-
-    with turn.span("agent", name="researcher") as parent:   # 父 span
-        with turn.span("tool", name="web_search"):          # 子 span，parent_span_id 指向父
-            ...
-
-`with turn.step(...)` 与各 `record_*` 方法同样参与 span 栈：在 `turn.span(...)`
-内部记录的 step 会自动挂到当前 span 下。
+层级说明
+--------
+`conversations` 是一维数组，先后顺序由 `step_no` 表达；工具调用与返回之间用
+`tool_calls[].id` <-> `tool_call_id` 关联。不再引入 span 层级字段；若业务方需要
+标注"这一步属于哪个子 agent"等额外信息，用 `meta` 自由扩展。
 """
 from __future__ import annotations
 
 import functools
 import inspect
+import logging
 import threading
 from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Union
 
@@ -38,7 +32,6 @@ from .config import Config
 from .schemas import (
     MESSAGE_TYPE_META,
     MessageType,
-    Status,
     Step,
     ToolCall,
     Trace,
@@ -47,6 +40,8 @@ from .schemas import (
     iso_timestamp,
     utc_now,
 )
+
+logger = logging.getLogger("agent_trace")
 
 
 def _as_tool_calls(spec: Any) -> List[ToolCall]:
@@ -114,24 +109,23 @@ class Turn:
         tracer: "Tracer",
         turn_id: str,
         session_id: str,
-        status: Optional[str] = None,
-        model: Optional[str] = None,
-        tags: Optional[Dict[str, str]] = None,
-        meta: Optional[Dict[str, Any]] = None,
+        turn_no: int = 1,
+        completed: Optional[bool] = None,
+        partial: bool = False,
+        metadata: Optional[Dict[str, Any]] = None,
         **extra: Any,
     ) -> None:
         self.tracer = tracer
         self.turn_id = turn_id
         self.session_id = session_id
-        self.model = model
-        self.tags = dict(tags or {})
-        self.meta = dict(meta or {})
+        self.turn_no = turn_no
+        self.metadata = dict(metadata or {})
         self.extra = dict(extra)
 
-        self.status = Status(status or tracer.config.default_status)
+        self.completed = tracer.config.default_completed if completed is None else bool(completed)
+        self.partial = bool(partial)
         self.error: Optional[str] = None
         self.started_at = utc_now()
-        self.ended_at: Optional[str] = None
 
         self._steps: List[Step] = []
         self._seq: Dict[MessageType, int] = {}
@@ -155,14 +149,9 @@ class Turn:
         latency_ms: Optional[int] = None,
         tool_calls: Optional[List[ToolCall]] = None,
         tool_call_id: Optional[str] = None,
-        status: Optional[str] = None,
+        completed: Optional[bool] = None,
+        partial: Optional[bool] = None,
         error: Optional[str] = None,
-        input_tokens: Optional[int] = None,
-        output_tokens: Optional[int] = None,
-        model: Optional[str] = None,
-        span_id: Optional[str] = None,
-        parent_span_id: Optional[str] = None,
-        tags: Optional[Dict[str, str]] = None,
         meta: Optional[Dict[str, Any]] = None,
         is_follow_up: Optional[bool] = None,
     ) -> Step:
@@ -170,11 +159,6 @@ class Turn:
             raise RuntimeError("该 turn 已提交，不能再追加 step")
         role = MESSAGE_TYPE_META[message_type][1]
         resolved_id = message_id or self._next_message_id(message_type)
-        # span 树：未显式指定时，span_id 新分配、parent 取当前上下文里的栈顶
-        if span_id is None:
-            span_id = generate_id("span")
-        if parent_span_id is None:
-            parent_span_id = ctx.get_current_span_id()
         step = Step(
             message_id=resolved_id,
             role=role,
@@ -185,14 +169,9 @@ class Turn:
             latency_ms=latency_ms,
             tool_calls=tool_calls,
             tool_call_id=tool_call_id,
-            status=Status(status) if status else None,
+            completed=completed,
+            partial=partial,
             error=error,
-            input_tokens=input_tokens,
-            output_tokens=output_tokens,
-            model=model,
-            span_id=span_id,
-            parent_span_id=parent_span_id,
-            tags=tags,
             meta=meta,
             is_follow_up=is_follow_up,
         )
@@ -215,7 +194,17 @@ class Turn:
         return self._append(MessageType.SYSTEM_PROMPT, content, kwargs.pop("timestamp", None), **kwargs)
 
     def record_tool_call(self, tool_calls: Any = None, **kwargs: Any) -> Step:
-        calls = _as_tool_calls(tool_calls if tool_calls is not None else kwargs.pop("calls", None))
+        """记录一批工具调用。
+
+        入参形态同 `_as_tool_calls`；也支持 `name=` / `arguments=` 简写：
+        `record_tool_call(name="web_search", arguments={"count": 8})`。
+        """
+        raw = tool_calls if tool_calls is not None else kwargs.pop("calls", None)
+        if raw is None and "name" in kwargs:
+            raw = {"name": kwargs.pop("name"), "arguments": kwargs.pop("arguments", None)}
+        if raw is None and "arguments" in kwargs:
+            raise ValueError("record_tool_call 传 arguments 时必须同时传 name")
+        calls = _as_tool_calls(raw)
         if not calls:
             raise ValueError("record_tool_call 需要至少一个工具调用")
         return self._append(
@@ -245,23 +234,15 @@ class Turn:
     def step(self, message_type: Union[MessageType, str], **kwargs: Any) -> "_StepContext":
         return _StepContext(self, MessageType(message_type), kwargs)
 
-    def span(self, kind: str = "agent", name: Optional[str] = None, **kwargs: Any) -> "_SpanContext":
-        """开启一个嵌套 span，内部记录的 step / 子 span 都挂到它下面。
-
-        kind 为自由文本标签（如 agent / tool / llm / retrieval），供下游区分层级用途；
-        name 为该 span 的名称（如子 agent 名、工具名）。
-        """
-        return _SpanContext(self, kind=kind, name=name, kwargs=kwargs)
-
     def record_error(self, error: str, content: Optional[str] = None, **kwargs: Any) -> Step:
         """落一条终止 step，并把整个 turn 标记为 error。"""
-        self.status = Status.ERROR
+        self.completed = False
         self.error = error
         return self._append(
             MessageType.FINAL_ANSWER,
             content,
             kwargs.pop("timestamp", None),
-            status=Status.ERROR.value,
+            completed=False,
             error=error,
             **kwargs,
         )
@@ -274,8 +255,8 @@ class Turn:
         return self
 
     def __exit__(self, exc_type, exc, tb) -> bool:
-        if exc is not None and self.status is not Status.ERROR:
-            self.status = Status.ERROR
+        if exc is not None and self.completed is not False:
+            self.completed = False
             self.error = self.error or ("%s: %s" % (exc_type.__name__, exc))
             # 异常路径：若还没有终止 step，补一条 error 的 final_answer
             if not self._steps or self._steps[-1].message_type is not MessageType.FINAL_ANSWER:
@@ -283,7 +264,7 @@ class Turn:
                     MessageType.FINAL_ANSWER,
                     None,
                     None,
-                    status=Status.ERROR.value,
+                    completed=False,
                     error=self.error,
                 )
         for kind, token in reversed(self._tokens):
@@ -300,30 +281,45 @@ class Turn:
         payload: Dict[str, Any] = {
             "turn_id": self.turn_id,
             "session_id": self.session_id,
-            "agent_name": self.tracer.config.agent_name,
-            "agent_version": self.tracer.config.agent_version,
-            "env": self.tracer.config.env,
-            "started_at": iso_timestamp(self.started_at),
-            "ended_at": iso_timestamp(ended),
+            "turn_no": self.turn_no,
+            "agent_id": self.tracer.config.agent_id,
+            "parent_agent_id": self.tracer.config.parent_agent_id,
+            "app_name": self.tracer.config.app_name,
+            "app_id": self.tracer.config.app_id,
+            "system_code": self.tracer.config.system_code,
+            "user_id": self.tracer.config.user_id,
+            "source": self.tracer.config.source,
+            "start_time": iso_timestamp(self.started_at),
+            "end_time": iso_timestamp(ended),
             "duration_ms": duration_ms,
-            "status": self.status.value,
+            "completed": self.completed,
+            "partial": self.partial,
             "error": self.error,
-            "model": self.model,
-            "tags": self.tags or None,
-            "meta": self.meta or None,
-            "conversation": [step.model_dump(mode="python") for step in self._steps],
+            "metadata": self.metadata or None,
+            "conversations": [step.model_dump(mode="python") for step in self._steps],
         }
         payload.update(self.extra)
         return Trace.model_validate(payload)
 
     def commit(self) -> Optional[Trace]:
-        """组装、校验并交给导出层。幂等，重复调用只提交一次。"""
+        """组装、校验并交给导出层。幂等，重复调用只提交一次。
+
+        采集是旁路：若本轮数据不满足契约（例如没有任何 user_query），
+        默认只记日志并丢弃这条 trace，绝不把 ValidationError 抛给业务方；
+        `config.debug=True` 时才向上抛，便于排查。
+        """
         if self._committed:
             return None
         self._committed = True
         if not self.tracer.config.enabled:
             return None
-        trace = self.as_trace()
+        try:
+            trace = self.as_trace()
+        except Exception as exc:
+            if self.tracer.config.debug:
+                raise
+            logger.warning("trace 校验失败，已丢弃 turn_id=%s: %s", self.turn_id, exc)
+            return None
         self.tracer._emit(trace)
         return trace
 
@@ -333,7 +329,7 @@ class Turn:
 
 
 class _StepContext:
-    """`with turn.step(...) as step:` 自动记录起止时间与 status。"""
+    """`with turn.step(...) as step:` 自动记录起止时间与 completed。"""
 
     def __init__(self, turn: Turn, message_type: MessageType, kwargs: Dict[str, Any]) -> None:
         self.turn = turn
@@ -361,7 +357,7 @@ class _StepContext:
         latency_ms = int((utc_now() - self._start).total_seconds() * 1000)
         kwargs = dict(self.kwargs)
         if exc is not None:
-            kwargs.setdefault("status", Status.ERROR.value)
+            kwargs.setdefault("completed", False)
             kwargs.setdefault("error", "%s: %s" % (exc_type.__name__, exc))
         # content 统一从 kwargs 取出，避免与位置参数重复
         content = kwargs.pop("content", None)
@@ -382,73 +378,38 @@ class _StepContext:
         return False
 
 
-class _SpanContext:
-    """嵌套 span 的上下文管理器：只维护层级，不产生 step。
-
-    进入时把新 span_id 压栈，内部记录的 step / 子 span 自动挂到它下面；
-    退出时弹栈。若传了 `record=True`，还会落一条用于标记该 span 起止的 step
-    （便于在只有 step 的下游还原层级）。
-    """
-
-    def __init__(self, turn: Turn, kind: str, name: Optional[str], kwargs: Dict[str, Any]) -> None:
-        self.turn = turn
-        self.kind = kind
-        self.name = name
-        self.kwargs = dict(kwargs)
-        self.span_id = generate_id("span")
-        self.parent_span_id: Optional[str] = None
-        self._start = None
-        self._token = None
-
-    def __enter__(self) -> "_SpanContext":
-        self._start = utc_now()
-        self.parent_span_id = ctx.get_current_span_id()
-        # span 容器自身也作为一条 step 落库，保证 parent_span_id 能解析到真实节点；
-        # 该 step 的用途由 meta.span_kind / meta.span_name 标注。
-        self.turn._append(
-            MessageType.REASONING,
-            None,
-            None,
-            span_id=self.span_id,
-            parent_span_id=self.parent_span_id,
-            meta={"span_kind": self.kind, "span_name": self.name, "span_container": True},
-        )
-        self._token = ctx.push_span(self.span_id)
-        return self
-
-    def __exit__(self, exc_type, exc, tb) -> bool:
-        if self._token is not None:
-            ctx.reset_span(self._token)
-            self._token = None
-        return False
-
-    @property
-    def latency_ms(self) -> Optional[int]:
-        if self._start is None:
-            return None
-        return int((utc_now() - self._start).total_seconds() * 1000)
-
-
 class Tracer:
     """SDK 入口。持有配置与导出器，负责创建 Turn 并分发已提交的 Trace。"""
 
     def __init__(
         self,
-        agent_name: Optional[str] = None,
-        agent_version: Optional[str] = None,
-        env: Optional[str] = None,
+        agent_id: Optional[str] = None,
+        parent_agent_id: Optional[str] = None,
+        app_name: Optional[str] = None,
+        app_id: Optional[str] = None,
+        system_code: Optional[str] = None,
+        user_id: Optional[str] = None,
+        source: Optional[str] = None,
         exporters: Optional[Iterable[Any]] = None,
         config: Optional[Config] = None,
         **config_overrides: Any,
     ) -> None:
         if config is None:
             overrides: Dict[str, Any] = dict(config_overrides)
-            if agent_name is not None:
-                overrides["agent_name"] = agent_name
-            if agent_version is not None:
-                overrides["agent_version"] = agent_version
-            if env is not None:
-                overrides["env"] = env
+            if agent_id is not None:
+                overrides["agent_id"] = agent_id
+            if parent_agent_id is not None:
+                overrides["parent_agent_id"] = parent_agent_id
+            if app_name is not None:
+                overrides["app_name"] = app_name
+            if app_id is not None:
+                overrides["app_id"] = app_id
+            if system_code is not None:
+                overrides["system_code"] = system_code
+            if user_id is not None:
+                overrides["user_id"] = user_id
+            if source is not None:
+                overrides["source"] = source
             config = Config.from_env(**overrides)
         self.config = config
         self._exporters: List[Any] = list(exporters or config.exporters or [])
@@ -488,7 +449,11 @@ class Tracer:
         session_id: Optional[str] = None,
         **kwargs: Any,
     ) -> Turn:
-        """创建并进入一轮采集。`with tracer.turn(...) as turn:`。"""
+        """创建并进入一轮采集。`with tracer.turn(...) as turn:`。
+
+        `turn_no` 为该会话内的第几轮（业务方传入，缺省 1）；
+        `completed` / `partial` 为结束状态，缺省取 config（true / false）。
+        """
         return Turn(
             self,
             turn_id=turn_id or generate_id("turn"),
@@ -505,7 +470,8 @@ class Tracer:
         def wrapper(*args: Any, **kwargs: Any) -> Any:
             turn_id = kwargs.pop("turn_id", None) or generate_id("turn")
             session_id = kwargs.pop("session_id", None) or generate_id("sess")
-            with self.turn(turn_id=turn_id, session_id=session_id) as turn:
+            turn_no = kwargs.pop("turn_no", 1)
+            with self.turn(turn_id=turn_id, session_id=session_id, turn_no=turn_no) as turn:
                 turn.record_user_query(_describe_call(func, args, kwargs))
                 result = func(*args, **kwargs)
                 turn.record_final_answer(_stringify(result))

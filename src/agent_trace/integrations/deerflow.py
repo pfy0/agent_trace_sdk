@@ -12,7 +12,9 @@
   AIMessage.content -> reasoning（伴随 tool_calls 时）/ final_answer（收尾时）
   AIMessage.tool_calls -> tool_call（多个调用合并为 1 个 step）
   ToolMessage -> tool_response
-- 子 agent / 子工具链用嵌套 span（span_id / parent_span_id）表达，不另开 trace。
+- 层级：`conversations` 一维数组，先后顺序由 step_no 表达；工具调用与返回用
+  `tool_calls[].id` <-> `tool_call_id` 关联。多 agent 场景下每个 run 各自产出一条
+  trace，靠 session_id 关联。
 
 依赖：langchain 存在时中间件继承真正的 `AgentMiddleware`（DeerFlow 的隔离包装器
 要求如此）；不存在时退化为普通类，仍可 import 本模块做纯逻辑单测。
@@ -21,7 +23,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
 
-from ..schemas import MessageType, Status
+from ..schemas import MessageType
 from ..schemas import ToolCall as TraceToolCall
 from ..tracer import Tracer, Turn
 
@@ -175,12 +177,12 @@ class AgentTraceMiddleware(_AgentMiddleware):
         self,
         tracer: Tracer,
         *,
-        agent_name: Optional[str] = None,
-        subagent_span: bool = True,
+        agent_id: Optional[str] = None,
     ) -> None:
         self.tracer = tracer
-        self.agent_name = agent_name
-        self.subagent_span = subagent_span
+        self.agent_id = agent_id
+        # 每个 session 已开出的轮次计数，用于自动填 turn_no（会话内第几轮）
+        self._turn_no_by_session: Dict[str, int] = {}
         # 每轮 run 的状态：key 为 run 标识，value 为该轮的采集状态
         self._turns: Dict[str, Dict[str, Any]] = {}
         # 每个 session 最近一次采集的 turn，用于把澄清续跑并入同一轮：
@@ -237,7 +239,6 @@ class AgentTraceMiddleware(_AgentMiddleware):
             entry: Dict[str, Any] = {
                 "turn": turn,
                 "seen": set(),
-                "model_name": context.get("model_name") or context.get("model"),
                 # 续跑：不重采 system_prompt
                 "system_prompt_done": True,
             }
@@ -248,12 +249,18 @@ class AgentTraceMiddleware(_AgentMiddleware):
             self._turns[key] = entry
             return
 
-        turn = self.tracer.turn(turn_id=str(run_id), session_id=str(session_id))
+        # turn_no = 该会话内的第几轮；中间件按 session 自增计数（澄清续跑不占用新轮次）
+        session_key = str(session_id)
+        self._turn_no_by_session[session_key] = self._turn_no_by_session.get(session_key, 0) + 1
+        turn = self.tracer.turn(
+            turn_id=str(run_id),
+            session_id=session_key,
+            turn_no=self._turn_no_by_session[session_key],
+        )
         turn.__enter__()  # 手动进入，生命周期由中间件控制（after_agent 提交）
         entry: Dict[str, Any] = {
             "turn": turn,
             "seen": set(),
-            "model_name": context.get("model_name") or context.get("model"),
             "system_prompt_done": False,
         }
 
@@ -328,12 +335,12 @@ class AgentTraceMiddleware(_AgentMiddleware):
 
         if role == "tool":
             tool_call_id = getattr(message, "tool_call_id", None)
-            status = getattr(message, "status", None)
-            failed = status == "error"
+            msg_status = getattr(message, "status", None)
+            failed = msg_status == "error"
             turn.record_tool_response(
                 tool_call_id=tool_call_id or "",
                 content=text,
-                status=Status.ERROR.value if failed else None,
+                completed=False if failed else None,
                 error=text if failed else None,
             )
             return
@@ -371,7 +378,7 @@ class AgentTraceMiddleware(_AgentMiddleware):
         turn: Turn = entry["turn"]
 
         if error:
-            turn.status = Status.ERROR
+            turn.completed = False
             turn.error = error
 
         # 末条 AI 文本的归宿：若本轮最后一条 step 是带 pending_final 标记的
@@ -388,7 +395,7 @@ class AgentTraceMiddleware(_AgentMiddleware):
         ):
             last.message_type = MessageType.FINAL_ANSWER
             if error:
-                last.status = Status.ERROR
+                last.completed = False
                 last.error = error
             promoted = True
 
@@ -413,7 +420,7 @@ class AgentTraceMiddleware(_AgentMiddleware):
             # 本轮没有产出可见回答（例如异常中断）：补一条终止 step
             turn.record_final_answer(
                 "",
-                status=Status.ERROR.value if error else None,
+                completed=False if error else None,
                 error=error,
             )
 
@@ -488,9 +495,13 @@ def _build_tracer(config: Dict[str, Any]) -> Tracer:
         exporters.append(MemoryExporter())
 
     return Tracer(
-        agent_name=config.get("agent_name") or "deer-flow",
-        agent_version=config.get("agent_version"),
-        env=config.get("env"),
+        agent_id=config.get("agent_id"),
+        parent_agent_id=config.get("parent_agent_id"),
+        app_name=config.get("app_name"),
+        app_id=config.get("app_id"),
+        system_code=config.get("system_code"),
+        user_id=config.get("user_id"),
+        source=config.get("source"),
         exporters=exporters,
     )
 
@@ -504,7 +515,8 @@ def install(registry: Any, config: Any) -> None:
           - use: agent_trace.integrations.deerflow:install
             config:
               output: "outputs/agent_traces.json"
-              agent_name: deer-flow
+              agent_id: "your-agent-id"
+              app_name: "deer-flow"
 
     注册一个覆盖 lead + subagent 的采集中间件。放置位置用 `STANDARD`：
     采集只观察状态，不改变模型的请求/响应，也不改工具返回值，因此对
@@ -519,8 +531,7 @@ def install(registry: Any, config: Any) -> None:
     tracer = _build_tracer(options)
     middleware = AgentTraceMiddleware(
         tracer,
-        agent_name=options.get("agent_name"),
-        subagent_span=options.get("subagent_span", True),
+        agent_id=options.get("agent_id"),
     )
 
     class _Contributor:

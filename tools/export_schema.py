@@ -12,7 +12,7 @@ import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "src"))
 
-from agent_trace.schemas import MESSAGE_TYPE_META, MessageType, Role, Status, Trace  # noqa: E402
+from agent_trace.schemas import MESSAGE_TYPE_META, MessageType, Role, Trace  # noqa: E402
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 OUT_DIR = os.path.join(ROOT, "schema")
@@ -38,7 +38,6 @@ def main() -> None:
             "role": {m.value: MESSAGE_TYPE_META[m][1].value for m in MessageType},
         },
         "role": [r.value for r in Role],
-        "status": [s.value for s in Status],
     }
     out2 = os.path.join(OUT_DIR, "enums.json")
     with open(out2, "w", encoding="utf-8", newline="\n") as fh:

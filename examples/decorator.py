@@ -10,7 +10,7 @@ from agent_trace import MemoryExporter, Tracer
 
 def main() -> None:
     memory = MemoryExporter()
-    tracer = Tracer(agent_name="demo-agent", env="local", exporters=[memory])
+    tracer = Tracer(agent_id="agent-demo-1", app_name="demo", exporters=[memory])
 
     @tracer.step("reasoning")
     def plan(question: str) -> str:
@@ -27,11 +27,13 @@ def main() -> None:
         search(question)
         return {"answer": "这是最终回答"}
 
-    answer("2026 世界人工智能大会的主题是什么", turn_id="turn-demo-2", session_id="sess-demo-1")
+    answer("2026 世界人工智能大会的主题是什么",
+           turn_id="turn-demo-2", session_id="sess-demo-1", turn_no=2)
 
     trace = memory.traces[0].serializable()
-    print("status :", trace["status"], "| steps:", len(trace["conversation"]))
-    for step in trace["conversation"]:
+    print("completed :", trace["completed"], "| partial:", trace["partial"],
+          "| steps:", len(trace["conversations"]))
+    for step in trace["conversations"]:
         preview = step.get("content") or step.get("tool_calls")
         print("  %d. %-14s %s" % (step["step_no"], step["message_type"], str(preview)[:50]))
 
@@ -44,8 +46,10 @@ def main() -> None:
         print("\n异常已捕获:", exc)
 
     failed = memory.traces[1].serializable()
-    print("status :", failed["status"], "| error:", failed["error"])
-    print("最后一步:", failed["conversation"][-1]["message_type"], failed["conversation"][-1].get("status"))
+    print("completed :", failed["completed"], "| partial:", failed["partial"],
+          "| error:", failed["error"])
+    print("最后一步:", failed["conversations"][-1]["message_type"],
+          "| completed:", failed["conversations"][-1].get("completed"))
 
 
 if __name__ == "__main__":

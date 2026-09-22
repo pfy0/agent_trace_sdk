@@ -4,20 +4,20 @@
 
     from agent_trace import Tracer, JsonExporter
 
-    tracer = Tracer(agent_name="news-daily", env="prod",
+    tracer = Tracer(agent_id="agent-demo-1", app_name="news-daily",
                     exporters=[JsonExporter("traces.json")])
 
     with tracer.turn(turn_id="t-1", session_id="s-1") as turn:
         turn.record_user_query("查看今日ai新闻热点")
         turn.record_reasoning("先搜索今日 AI 新闻……")
-        turn.record_tool_call(name="web_search", arguments={"count": 8})
+        turn.record_tool_call([("web_search", {"count": 8})])
         turn.record_tool_response(tool_call_id="call_1", content="{...}")
         turn.record_final_answer("今日要闻……")
 """
 from __future__ import annotations
 
 from .config import Config
-from .context import get_current_span_id, get_current_turn
+from .context import get_current_turn
 from .exporters import (
     Exporter,
     HttpExporter,
@@ -31,7 +31,6 @@ from .schemas import (
     MESSAGE_TYPE_META,
     MessageType,
     Role,
-    Status,
     Step,
     ToolCall,
     Trace,
@@ -54,7 +53,6 @@ __all__ = [
     "ToolCall",
     "MessageType",
     "Role",
-    "Status",
     "MESSAGE_TYPE_META",
     "Exporter",
     "MemoryExporter",
@@ -64,7 +62,6 @@ __all__ = [
     "HttpExporter",
     "TransportError",
     "get_current_turn",
-    "get_current_span_id",
     "generate_id",
     "generate_message_id",
     "iso_timestamp",

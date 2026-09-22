@@ -1,4 +1,4 @@
-"""XLSX 导出器：把 trace 的 conversation 展平成一行一个 step 的 Excel 表。
+"""XLSX 导出器：把 trace 的 conversations 展平成一行一个 step 的 Excel 表。
 
 一条 tool_call 消息 = 一行，多个调用放在同一格里（JSON 数组）。
 """
@@ -62,7 +62,7 @@ def trace_to_rows(trace: Trace) -> List[Dict[str, Any]]:
             }
         )
 
-    for step in trace.conversation:
+    for step in trace.conversations:
         if step.message_type is MessageType.TOOL_CALL:
             calls = [call.model_dump(mode="json", exclude_none=True) for call in step.tool_calls or []]
             emit(step, calls, step.tool_call_id)

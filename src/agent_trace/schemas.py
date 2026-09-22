@@ -5,7 +5,7 @@ pydantic 模型里，schema 演进时只需改这里。
 
 两层数据模型：
 - Trace：一次 agent 运行 = 一个 turn = 一轮交互，主键 `turn_id`。
-- Step：trace 中的一步，即 `conversation` 数组里的一条消息。
+- Step：trace 中的一步，即 `conversations` 数组里的一条消息。
 """
 from __future__ import annotations
 
@@ -34,12 +34,6 @@ class Role(str, Enum):
     USER = "user"
     ASSISTANT = "assistant"
     TOOL = "tool"
-
-
-class Status(str, Enum):
-    OK = "ok"
-    ERROR = "error"
-    CANCELLED = "cancelled"
 
 
 # message_type -> (类型缩写, 对应 role)
@@ -91,7 +85,7 @@ class ToolCall(BaseModel):
 
 
 class Step(BaseModel):
-    """轨迹中的一步 = `conversation` 数组里的一个元素。"""
+    """轨迹中的一步 = `conversations` 数组里的一个元素。"""
 
     model_config = ConfigDict(extra="allow")
 
@@ -114,15 +108,14 @@ class Step(BaseModel):
     tool_calls: Optional[List[ToolCall]] = None
     tool_call_id: Optional[str] = None
 
-    # 待规范文档确认的增量字段
-    span_id: Optional[str] = None
-    parent_span_id: Optional[str] = None
-    status: Optional[Status] = None
+    # 结束状态（取代早期的单一 status）
+    completed: Optional[bool] = Field(
+        default=None, description="该步是否正常跑完；False 表示出错中断"
+    )
+    partial: Optional[bool] = Field(
+        default=None, description="该步是否因超时等外部条件被截断"
+    )
     error: Optional[str] = None
-    input_tokens: Optional[int] = Field(default=None, ge=0)
-    output_tokens: Optional[int] = Field(default=None, ge=0)
-    model: Optional[str] = None
-    tags: Optional[Dict[str, str]] = None
     meta: Optional[Dict[str, Any]] = None
 
     @field_validator("message_id")
@@ -161,55 +154,85 @@ class Trace(BaseModel):
 
     `turn_id` 由业务方传入，是 trace 的唯一标识（不再单独引入 trace_id）。
     `session_id` 同样由业务方传入，用于关联同一会话的多个 turn。
+
+    字段与公司《轨迹数据规范》对齐；`id` / `create_time` 由入库侧生成，
+    SDK 只留空位。`start_time` / `end_time` 对应采集的起止时刻。
     """
 
     model_config = ConfigDict(extra="allow")
 
-    turn_id: str = Field(..., min_length=1, description="一轮交互的唯一标识，业务方传入")
-    session_id: str = Field(..., min_length=1, description="会话标识，业务方传入")
-    agent_name: Optional[str] = None
-    agent_version: Optional[str] = None
-    env: Optional[str] = None
+    # 入库侧生成（SDK 留空）
+    id: Optional[str] = Field(default=None, description="事件唯一 ID（UUIDV7），入库自动生成")
+    create_time: Optional[str] = Field(
+        default=None, description="入库时间 ISO 8601（UTC），入库自动生成"
+    )
 
-    started_at: Optional[str] = None
-    ended_at: Optional[str] = None
+    turn_id: str = Field(..., min_length=1, description="回合唯一标识（turn_UUIDV7），业务方传入")
+    turn_no: int = Field(
+        default=1, ge=1, description="该会话内的第几轮交互，从 1 递增，业务方传入"
+    )
+    session_id: str = Field(..., min_length=1, description="会话唯一标识（sess_UUIDV7）")
+
+    start_time: Optional[str] = Field(default=None, description="回合开始时间 ISO 8601（UTC）")
+    end_time: Optional[str] = Field(default=None, description="回合结束时间 ISO 8601（UTC）")
+
+    # 业务标识
+    app_name: Optional[str] = Field(default=None, description="项目 / 产品 / 场景标识")
+    app_id: Optional[str] = None
+    system_code: Optional[str] = Field(default=None, description="触发事件的系统（ALM 系统 S 码）")
+    user_id: Optional[str] = Field(default=None, description="用户 ID（默认工号）")
+    source: Optional[str] = Field(default=None, description="事件来源入口，如接口地址")
+
+    # 智能体身份（agent_id 来自公司内部智能体注册市场）
+    agent_id: Optional[str] = Field(default=None, description="执行此步骤的智能体唯一 ID")
+    parent_agent_id: Optional[str] = Field(default=None, description="子智能体对应的父智能体 ID")
+
+    conversations_type: str = Field(
+        default="openai",
+        description="会话格式标识：openai messages / sharegpt / 自定义 等",
+    )
+    conversations: List[Step] = Field(default_factory=list, description="该轮的全部步骤")
+
+    completed: bool = Field(default=True, description="该轮是否真正结束")
+    partial: bool = Field(default=False, description="是否因超时等外部条件被截断")
+
+    # 统计类
+    api_calls: Optional[str] = Field(default=None, description="本回合 API 调用总次数（含重试）")
+    toolsets_used: Optional[List[str]] = Field(default=None, description="调用的工具集名称列表")
+    tool_stats: Optional[Dict[str, Any]] = Field(default=None, description="各工具调用统计")
+    tool_error_counts: Optional[Dict[str, Any]] = Field(default=None, description="各工具错误汇总")
+    token_usage: Optional[Dict[str, Any]] = Field(default=None, description="token 消耗汇总")
+
+    metadata: Optional[Dict[str, Any]] = Field(default=None, description="扩展元数据（自定义标签、版本等）")
+    extra_info: Optional[Dict[str, Any]] = Field(default=None, description="扩展业务数据（任意额外字段）")
+
     duration_ms: Optional[int] = Field(default=None, ge=0)
-    status: Optional[Status] = None
     error: Optional[str] = None
-
-    model: Optional[str] = None
-    input_tokens: Optional[int] = Field(default=None, ge=0)
-    output_tokens: Optional[int] = Field(default=None, ge=0)
-
-    tags: Optional[Dict[str, str]] = None
-    meta: Optional[Dict[str, Any]] = None
-
-    conversation: List[Step] = Field(default_factory=list, description="该轮的全部步骤")
 
     @model_validator(mode="after")
     def _validate_turn(self) -> "Trace":
-        if not self.conversation:
-            raise ValueError("conversation 不能为空：一个 trace 至少包含一个 step")
+        if not self.conversations:
+            raise ValueError("conversations 不能为空：一个 trace 至少包含一个 step")
 
         # 边界由 turn_id 决定：同一 turn_id 下的多条 user_query 属于同一轮，
         # 按数组顺序区分——第一条是初始输入，其余是追问/补充，不做切分。
         # 多轮对话的切分只能通过 turn_id（见 ingest.split_by_turn）。
         user_queries = [
-            step for step in self.conversation if step.message_type is MessageType.USER_QUERY
+            step for step in self.conversations if step.message_type is MessageType.USER_QUERY
         ]
         if not user_queries:
             raise ValueError("一个 trace 至少要包含一个 user_query（该轮的用户输入）")
-        if self.conversation[0].message_type not in (
+        if self.conversations[0].message_type not in (
             MessageType.USER_QUERY,
             MessageType.SYSTEM_PROMPT,
         ):
             raise ValueError(
                 "trace 的第一步应为 system_prompt 或 user_query，实际是 %s"
-                % self.conversation[0].message_type.value
+                % self.conversations[0].message_type.value
             )
 
         # step_no 必须从 1 起连续递增
-        for index, step in enumerate(self.conversation, start=1):
+        for index, step in enumerate(self.conversations, start=1):
             if step.step_no is not None and step.step_no != index:
                 raise ValueError(
                     "step_no 必须从 1 递增：第 %d 个 step 的 step_no=%s" % (index, step.step_no)
@@ -220,20 +243,20 @@ class Trace(BaseModel):
     def from_raw(
         cls,
         payload: Dict[str, Any],
-        conversation_key: str = "conversation",
+        conversation_key: str = "conversations",
     ) -> "Trace":
-        """从上报/导入的裸字典构造 Trace；兼容 messages 与 conversation 两种键名。
+        """从上报/导入的裸字典构造 Trace；兼容 messages / conversation / conversations 键名。
 
         若 step 缺少 step_no，按数组顺序自动补 1..N。
         """
         data = dict(payload)
         raw_steps = None
-        for key in (conversation_key, "conversation", "messages"):
+        for key in (conversation_key, "conversations", "conversation", "messages"):
             if isinstance(data.get(key), list):
                 raw_steps = data.pop(key)
                 break
         if raw_steps is None:
-            raise ValueError("未找到 conversation / messages 数组")
+            raise ValueError("未找到 conversations / conversation / messages 数组")
 
         steps: List[Dict[str, Any]] = []
         for index, raw in enumerate(raw_steps, start=1):
@@ -241,11 +264,11 @@ class Trace(BaseModel):
             step.setdefault("step_no", index)
             steps.append(step)
 
-        data["conversation"] = steps
+        data["conversations"] = steps
         return cls.model_validate(data)
 
     def serializable(self) -> Dict[str, Any]:
         """序列化为上报/导出用的字典，丢弃空值字段。"""
         dumped = self.model_dump(mode="json", exclude_none=True, by_alias=True)
-        dumped["conversation"] = [step.serializable() for step in self.conversation]
+        dumped["conversations"] = [step.serializable() for step in self.conversations]
         return dumped

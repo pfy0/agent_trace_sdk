@@ -7,7 +7,7 @@ Agent 运行轨迹采集 SDK。业务方以**最小改动**接入后，SDK 自�
 ## 采集单位
 
 - **Trace**：一次 agent 运行 = 一个 turn = 一轮交互，是采集/校验/上报的基本单位。
-- **Step**：trace 中的一步，即 `conversation` 数组里的一条消息。
+- **Step**：trace 中的一步，即 `conversations` 数组里的一条消息。
 - 轮次边界由 `turn_id` 决定：**同一 `turn_id` 下的消息属于同一轮**，一轮内可以出现
   多条 `user_query`（第一条是初始输入，其余是追问/补充，会标记 `is_follow_up=True`），
   不做切分；跨轮切分只按 `turn_id`。
@@ -46,16 +46,15 @@ pip install -e ".[all]"     # 全部可选依赖
 from agent_trace import Tracer, JsonExporter, XlsxExporter
 
 tracer = Tracer(
-    agent_name="news-daily",
-    agent_version="1.0.0",
-    env="prod",
+    agent_id="your-agent-id",      # 智能体注册市场里的 ID
+    app_name="news-daily",         # 项目 / 产品 / 场景标识
     exporters=[
         JsonExporter("output/traces.json"),
         XlsxExporter("output/steps.xlsx"),
     ],
 )
 
-with tracer.turn(turn_id="turn-1", session_id="sess-1") as turn:
+with tracer.turn(turn_id="turn-1", session_id="sess-1", turn_no=1) as turn:
     turn.record_user_query("查看今日 ai 新闻热点")
     turn.record_reasoning("先搜索今日 AI 新闻……")
     turn.record_tool_call([("web_search", {"count": 8}), ("web_search", {"count": 6})])
@@ -65,7 +64,7 @@ with tracer.turn(turn_id="turn-1", session_id="sess-1") as turn:
 ```
 
 退出 `with` 时 SDK 自动：分配 `step_no` / `message_id`、计算 `duration_ms`、
-校验成 `Trace`、交给每个导出器。异常路径也会落一条终止 step 并把 `status` 置为 `error`。
+校验成 `Trace`、交给每个导出器。异常路径也会落一条终止 step 并把 `completed` 置为 `false`。
 
 ## 手动埋点 API
 
@@ -84,27 +83,21 @@ OpenAI 风格的完整对象、以及它们的列表。
 
 `with turn.step(message_type)` 会自动记录该步的起止时间与 `latency_ms`。
 
-## Span 树（子 agent / 子工具链）
+## 先后顺序与工具关联
 
-同一个 turn 内的所有步骤共用一条 trace。子 agent、子工具链用**嵌套 span**表达，
-不另开 trace —— 与 OTel / Langfuse 的惯例一致：
+`conversations` 是一维数组，**先后顺序由 `step_no` 表达**；工具调用与工具返回之间用
+`tool_calls[].id` <-> `tool_call_id` 关联：
 
-```python
-with tracer.turn(turn_id="t-1", session_id="s-1") as turn:
-    turn.record_user_query("调研今日 AI 新闻并写简报")
-    with turn.span("agent", name="researcher"):        # 子 agent
-        turn.record_reasoning("开始检索……")
-        with turn.span("tool", name="web_search"):     # 子工具
-            turn.record_tool_call([("web_search", {"q": "AI"})])
-            turn.record_tool_response(tool_call_id="call_1", content="...")
+```
+step 3  tool_call      tool_calls: [{id: "call_0964..."}, {id: "call_19bc..."}]
+step 4  tool_response  tool_call_id: "call_0964..."   ← 回关到 step 3 的第一个调用
+step 5  tool_response  tool_call_id: "call_19bc..."   ← 回关到 step 3 的第二个调用
 ```
 
-- 每个 step 自动分配 `span_id`，`parent_span_id` 指向当前嵌套层级的父 span；
-  顶层 step 的 `parent_span_id` 为 `None`。
-- span 容器自身会落一条标记 step（`meta.span_kind` / `meta.span_name` /
-  `meta.span_container=True`），保证 `parent_span_id` 能解析到真实节点。
-- span 栈用 `contextvars` 实现，asyncio 并发任务 / 线程各持一份拷贝，
-  并发子任务不会互相串层。
+- 不引入 span 层级字段（`span_id` / `parent_span_id` 已移除）。
+- 多 agent 场景下每个 run 各自产出一条 trace，靠 `session_id` 关联。
+- 需要额外归属信息（如"这一步由哪个子 agent 产出"）时，用 `meta` 自由扩展：
+  `turn.record_reasoning("...", meta={"agent": "researcher"})`。
 
 ## 装饰器
 
@@ -134,12 +127,24 @@ Excel 里一条 tool_call 消息占一行，多个调用放在同一格（JSON �
 ## 字段契约
 
 Step 字段：`message_id`（`msg_{缩写}_{序号}`）、`role`、`message_type`、`content`、
-`timestamp`、`step_no`、`latency_ms`、`tool_calls`、`tool_call_id`、`is_follow_up`，
-以及 `span_id` / `parent_span_id`（span 树）和 `status` / `error` / token 与 `model` 字段。
+`timestamp`、`step_no`、`latency_ms`、`tool_calls`、`tool_call_id`、`is_follow_up`、
+`completed` / `partial` / `error`、`meta`。
 
-Trace 字段：`turn_id`、`session_id`、`agent_name` / `agent_version`、`env`、
-`started_at` / `ended_at` / `duration_ms`、`status` / `error`、token 用量、
-`tags` / `meta`、`conversation`。
+Trace 字段（与公司《轨迹数据规范》对齐）：
+
+- 标识与时间：`turn_id`、`turn_no`（会话内第几轮）、`session_id`、
+  `start_time` / `end_time`（ISO 8601 UTC）、`id` / `create_time`（入库侧生成，SDK 留空）。
+- 业务标识：`app_name`、`app_id`、`system_code`、`user_id`、`source`、
+  `agent_id`、`parent_agent_id`。
+- 会话内容：`conversations_type` 与 `conversations`（该轮全部 step 的数组）。
+- 结束状态：`completed` / `partial`。
+- 统计（可选）：`api_calls`、`toolsets_used`、`tool_stats`、`tool_error_counts`、
+  `token_usage`。
+- 扩展（可选）：`metadata`、`extra_info`；另有 `duration_ms` / `error` 两个便捷字段。
+
+结束状态说明：`completed` = 该轮是否**正常跑完**（异常/中断为 `false`）；
+`partial` = 是否因超时等**外部条件被截断**。两者都可为 true/false 组合，
+取代了早期的单一 `status` 字段。
 
 `message_id` 校验**只查格式、不查序号连续性**（历史数据存在类型内自增与全局位置两种编号）。
 
@@ -153,7 +158,8 @@ plugins:
   - use: agent_trace.integrations.deerflow:install
     config:
       output: "outputs/agent_traces.json"   # 落盘路径（.jsonl 后缀走 JSONL）
-      agent_name: deer-flow
+      agent_id: "your-agent-id"
+      app_name: deer-flow
       memory: false                          # true 时同时留一份在内存
 ```
 
@@ -167,7 +173,7 @@ plugins:
 | `AIMessage.content`（带 `tool_calls`） | `reasoning` |
 | `AIMessage.content`（收尾那条） | `final_answer` |
 | `AIMessage.tool_calls`（多个） | 合并为 **1 个** `tool_call` step |
-| `ToolMessage` | `tool_response`（带 `tool_call_id`，失败时带 `status=error`） |
+| `ToolMessage` | `tool_response`（带 `tool_call_id`，失败时带 `completed=false`） |
 
 - `turn_id` 取 DeerFlow 的 `run_id`，`session_id` 取 `thread_id`；同一 thread 的多轮
   run 各自产出一条 trace，共享 `session_id`。
@@ -226,7 +232,6 @@ schema/              # 语言无关的 JSON Schema 契约
 python examples/manual_api.py    # 手动埋点最小闭环 + 三种导出
 python examples/decorator.py     # 装饰器与异常路径
 python examples/import_data.py   # 导入现成数据、多轮切分
-python examples/nested_spans.py  # 嵌套 span 树（子 agent / 子工具链）
 python examples/deerflow_integration.py  # DeerFlow 中间件集成
 ```
 
@@ -234,12 +239,15 @@ python examples/deerflow_integration.py  # DeerFlow 中间件集成
 
 | 变量 | 说明 | 默认 |
 | :--- | :--- | :--- |
-| `AGENT_TRACE_AGENT_NAME` | agent 名称 | 空 |
-| `AGENT_TRACE_ENV` | 运行环境 | 空 |
+| `AGENT_TRACE_AGENT_ID` | 智能体 ID | 空 |
+| `AGENT_TRACE_PARENT_AGENT_ID` | 父智能体 ID | 空 |
+| `AGENT_TRACE_APP_NAME` | 项目 / 产品 / 场景标识 | 空 |
+| `AGENT_TRACE_APP_ID` | 应用 ID | 空 |
+| `AGENT_TRACE_SYSTEM_CODE` | 触发事件的系统（ALM S 码） | 空 |
+| `AGENT_TRACE_USER_ID` | 用户 ID（默认工号） | 空 |
+| `AGENT_TRACE_SOURCE` | 事件来源入口 | 空 |
 | `AGENT_TRACE_ENABLED` | 采集总开关 | `true` |
 | `AGENT_TRACE_DEBUG` | 导出器异常是否向上抛 | `false` |
-
-`AGENT_TRACE_AGENT_VERSION` 同样可用。
 
 ## 说明
 

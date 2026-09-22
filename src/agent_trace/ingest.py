@@ -10,7 +10,7 @@ from .schemas import Trace
 
 
 def _extract_steps(payload: Any, depth: int = 0, max_depth: int = 8) -> Optional[List[Dict[str, Any]]]:
-    """在任意嵌套结构里定位 step 列表，兼容 conversation / messages 键名。"""
+    """在任意嵌套结构里定位 step 列表，兼容 conversations / conversation / messages 键名。"""
     if depth > max_depth:
         return None
     if isinstance(payload, list):
@@ -18,7 +18,7 @@ def _extract_steps(payload: Any, depth: int = 0, max_depth: int = 8) -> Optional
             return list(payload)
         return None
     if isinstance(payload, dict):
-        for key in ("conversation", "messages"):
+        for key in ("conversations", "conversation", "messages"):
             inner = payload.get(key)
             if isinstance(inner, list):
                 return list(inner)
@@ -37,30 +37,34 @@ def split_by_turn(
     """多轮数据按 turn_id 切分成多条 trace。
 
     step 里必须带 turn_id；缺 turn_id 的消息会被跳过（无法归属到任何轮次）。
-    切出的 trace 按首次出现的顺序排列。
+    切出的 trace 按首次出现的顺序排列，并据此自动填 `turn_no`（1、2、…）；
+    需要自定义时可经 `**trace_meta` 覆盖（如 `turn_no=10`）。`turn_id` 只用于
+    分桶，不会修改调用方传入的原始数据。
     """
     steps = _extract_steps(payload)
     if steps is None:
-        raise ValueError("未在 payload 中找到 conversation / messages 数组")
+        raise ValueError("未在 payload 中找到 conversations / conversation / messages 数组")
 
     buckets: Dict[str, List[Dict[str, Any]]] = {}
     order: List[str] = []
     for raw in steps:
         if not isinstance(raw, dict):
             continue
-        turn_id = raw.pop("turn_id", None)
+        # 不修改调用方传入的原始数据：turn_id 只用于分桶，复刻一份再剥离
+        turn_id = raw.get("turn_id")
         if turn_id is None:
             continue
+        step = {key: value for key, value in raw.items() if key != "turn_id"}
         if turn_id not in buckets:
             buckets[turn_id] = []
             order.append(turn_id)
-        buckets[turn_id].append(raw)
+        buckets[turn_id].append(step)
 
     if not order:
         raise ValueError("消息里没有 turn_id，无法按轮次切分")
 
     traces: List[Trace] = []
-    for turn_id in order:
+    for turn_no, turn_id in enumerate(order, start=1):
         steps = buckets[turn_id]
         # 同一 turn 内第 2 条及以后的 user_query 自动标记为追问
         seen_user_query = False
@@ -74,7 +78,9 @@ def split_by_turn(
                 {
                     "turn_id": turn_id,
                     "session_id": session_id or turn_id,
-                    "conversation": steps,
+                    # 切分天然知道轮次顺序：按首次出现顺序编号，业务方可用 trace_meta 覆盖
+                    "turn_no": turn_no,
+                    "conversations": steps,
                     **trace_meta,
                 }
             )

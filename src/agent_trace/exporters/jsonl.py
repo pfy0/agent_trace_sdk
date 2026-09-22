@@ -33,7 +33,7 @@ class JsonlExporter(Exporter):
 
     def _rows(self, trace: Trace) -> List[Dict[str, Any]]:
         payload = trace.serializable()
-        conversation = payload.pop("conversation", [])
+        conversation = payload.pop("conversations", [])
         rows: List[Dict[str, Any]] = []
         for step in conversation:
             if self.include_trace_meta:

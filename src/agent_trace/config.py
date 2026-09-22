@@ -28,13 +28,18 @@ class Config(BaseModel):
 
     model_config = ConfigDict(extra="allow")
 
-    # trace 级默认元数据
-    agent_name: Optional[str] = Field(default=None)
-    agent_version: Optional[str] = Field(default=None)
-    env: Optional[str] = Field(default=None)
+    # trace 级默认元数据（对应规范中的业务标识字段）
+    agent_id: Optional[str] = Field(default=None)
+    parent_agent_id: Optional[str] = Field(default=None)
+    app_name: Optional[str] = Field(default=None)
+    app_id: Optional[str] = Field(default=None)
+    system_code: Optional[str] = Field(default=None)
+    user_id: Optional[str] = Field(default=None)
+    source: Optional[str] = Field(default=None)
 
     # 实时采集默认值
-    default_status: str = "ok"
+    default_completed: bool = Field(default=True)
+    default_partial: bool = Field(default=False)
 
     # 导出/上报
     exporters: Optional[list] = Field(default=None)
@@ -47,9 +52,13 @@ class Config(BaseModel):
     def from_env(cls, **overrides: Any) -> "Config":
         """从环境变量构造配置，显式 overrides 优先级最高。"""
         defaults: Dict[str, Any] = {
-            "agent_name": _env("AGENT_NAME"),
-            "agent_version": _env("AGENT_VERSION"),
-            "env": _env("ENV"),
+            "agent_id": _env("AGENT_ID"),
+            "parent_agent_id": _env("PARENT_AGENT_ID"),
+            "app_name": _env("APP_NAME"),
+            "app_id": _env("APP_ID"),
+            "system_code": _env("SYSTEM_CODE"),
+            "user_id": _env("USER_ID"),
+            "source": _env("SOURCE"),
             "enabled": _env_bool("ENABLED", True),
             "debug": _env_bool("DEBUG", False),
         }

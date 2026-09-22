@@ -6,7 +6,7 @@
       - use: agent_trace.integrations.deerflow:install
         config:
           output: "outputs/agent_traces.json"   # 轨迹落盘路径（.jsonl 后缀走 JSONL）
-          agent_name: deer-flow
+          agent_id: "your-agent-id"
           memory: false                          # true 时同时留一份在内存
 
 方式 B：手动把中间件挂到自己的 agent 上（本示例演示）
@@ -20,8 +20,8 @@ from agent_trace.integrations.deerflow import AgentTraceMiddleware
 def build_middleware() -> AgentTraceMiddleware:
     """构造采集中间件，供 create_agent(middleware=[...]) 使用。"""
     tracer = Tracer(
-        agent_name="deer-flow",
-        env="local",
+        agent_id="agent-demo-1",
+        app_name="deer-flow",
         exporters=[MemoryExporter()],
     )
     return AgentTraceMiddleware(tracer)
@@ -72,7 +72,7 @@ def main() -> None:
 
     trace = middleware.tracer._exporters[0].traces[0].serializable()
     print("\nturn_id:", trace["turn_id"], "| session:", trace["session_id"])
-    for step in trace["conversation"]:
+    for step in trace["conversations"]:
         print("  %d. %-14s %s" % (step["step_no"], step["message_type"], (step.get("content") or "")[:28]))
 
 
