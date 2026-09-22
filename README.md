@@ -126,6 +126,45 @@ Trace 字段：`turn_id`、`session_id`、`agent_name` / `agent_version`、`env`
 
 `message_id` 校验**只查格式、不查序号连续性**（历史数据存在类型内自增与全局位置两种编号）。
 
+## 框架集成：DeerFlow
+
+DeerFlow 是 LangGraph 系框架，集成方式是**插件 + 中间件**，不改动业务代码：
+
+```yaml
+# DeerFlow 的 config.yaml
+plugins:
+  - use: agent_trace.integrations.deerflow:install
+    config:
+      output: "outputs/agent_traces.json"   # 落盘路径（.jsonl 后缀走 JSONL）
+      agent_name: deer-flow
+      memory: false                          # true 时同时留一份在内存
+```
+
+采集范围覆盖 lead agent 与 subagent（`AgentScope.BOTH`）。自动映射规则：
+
+| DeerFlow / LangChain | → step |
+| :--- | :--- |
+| `SystemMessage` | `system_prompt`（随 thread 固定，每轮采一次） |
+| `HumanMessage` | `user_query`（同轮第 2 条起自动标 `is_follow_up`） |
+| `AIMessage.content`（带 `tool_calls`） | `reasoning` |
+| `AIMessage.content`（收尾那条） | `final_answer` |
+| `AIMessage.tool_calls`（多个） | 合并为 **1 个** `tool_call` step |
+| `ToolMessage` | `tool_response`（带 `tool_call_id`，失败时带 `status=error`） |
+
+- `turn_id` 取 DeerFlow 的 `run_id`，`session_id` 取 `thread_id`；同一 thread 的多轮
+  run 各自产出一条 trace，共享 `session_id`。
+- 初始 state 里携带的历史消息不会重复采集（以最后一条 human 消息为界）。
+- 无 langchain 的环境下本模块仍可 import（中间件退化为普通类，便于纯逻辑单测）。
+
+也支持手动挂载：
+
+```python
+from langchain.agents import create_agent
+from agent_trace.integrations.deerflow import AgentTraceMiddleware
+
+agent = create_agent(model=..., tools=[...], middleware=[AgentTraceMiddleware(tracer)])
+```
+
 ## 目录结构
 
 ```
@@ -135,6 +174,7 @@ src/agent_trace/
 ├── context.py       # contextvars 上下文传播
 ├── config.py        # 配置：环境变量 + 代码初始化
 ├── ingest.py        # 离线导入与多轮按 turn_id 切分
+├── integrations/    # 框架适配（deerflow.py）
 ├── utils.py         # 通用工具
 └── exporters/       # json / jsonl / xlsx / base
 examples/            # 可运行示例
@@ -147,6 +187,7 @@ python examples/manual_api.py    # 手动埋点最小闭环 + 三种导出
 python examples/decorator.py     # 装饰器与异常路径
 python examples/import_data.py   # 导入现成数据、多轮切分
 python examples/nested_spans.py  # 嵌套 span 树（子 agent / 子工具链）
+python examples/deerflow_integration.py  # DeerFlow 中间件集成
 ```
 
 ## 环境变量

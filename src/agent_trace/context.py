@@ -39,8 +39,17 @@ def set_current_turn(turn: Optional["Turn"]) -> contextvars.Token:
 
 
 def reset_current_turn(token: contextvars.Token) -> None:
-    """恢复到设置前的状态。"""
-    _current_turn.reset(token)
+    """恢复到设置前的状态。
+
+    token 必须与 set 时处于同一个 context。LangGraph 等框架会把
+    `before_*` / `after_*` 钩子调度到不同 context 执行，此时 reset 会抛
+    ValueError；这种跨 context 的情况按"尽力恢复"处理——该 context 本就是
+    临时的，重新绑定一个显式值比抛异常更安全。
+    """
+    try:
+        _current_turn.reset(token)
+    except ValueError:
+        _current_turn.set(None)
 
 
 def get_baggage() -> Dict[str, Any]:
@@ -56,7 +65,10 @@ def set_baggage(**items: Any) -> contextvars.Token:
 
 
 def reset_baggage(token: contextvars.Token) -> None:
-    _baggage.reset(token)
+    try:
+        _baggage.reset(token)
+    except ValueError:
+        _baggage.set({})
 
 
 def get_span_stack() -> tuple:
@@ -76,5 +88,8 @@ def push_span(span_id: str) -> contextvars.Token:
 
 
 def reset_span(token: contextvars.Token) -> None:
-    """恢复到压栈前的状态。"""
-    _span_stack.reset(token)
+    """恢复到压栈前的状态；跨 context 时按尽力恢复处理（见 reset_current_turn）。"""
+    try:
+        _span_stack.reset(token)
+    except ValueError:
+        _span_stack.set(())
