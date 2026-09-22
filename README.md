@@ -20,17 +20,32 @@ Agent 运行轨迹采集 SDK。业务方以**最小改动**接入后，SDK 自�
 **业务方（从 GitHub 私有仓库安装）**：
 
 ```bash
-pip install "git+https://github.com/pfy0/agent_trace_sdk.git@v0.1.0"
+pip install "git+https://github.com/pfy0/agent_trace_sdk.git@v0.2.0"
 ```
 
 - 需要：机器能访问 GitHub、装了 `git`、对仓库有读权限。
 - 私有仓库还需带上凭证（SSH key 或 Token）：
-  `pip install "git+ssh://git@github.com/pfy0/agent_trace_sdk.git@v0.1.0"`
+  `pip install "git+ssh://git@github.com/pfy0/agent_trace_sdk.git@v0.2.0"`
 - 装可选依赖（Excel 导出等）：
-  `pip install "agent-trace-sdk[all] @ git+https://github.com/pfy0/agent_trace_sdk.git@v0.1.0"`
+  `pip install "agent-trace-sdk[all] @ git+https://github.com/pfy0/agent_trace_sdk.git@v0.2.0"`
 
 固定 tag 安装，版本可复现。完整说明（Token 配置、升级、离线 wheel、
 DeerFlow/uv 安装）见 `docs/distribute.md`。
+
+### v0.2.0 升级提示（不向后兼容）
+
+v0.2.0 按公司《轨迹数据规范》改造了字段，从 v0.1.0 升级需改代码：
+
+| v0.1.0 | v0.2.0 |
+| :--- | :--- |
+| `Tracer(agent_name=..., agent_version=..., env=...)` | `Tracer(agent_id=..., app_name=...)` |
+| `trace["started_at"]` / `trace["ended_at"]` | `trace["start_time"]` / `trace["end_time"]` |
+| `trace["meta"]` | `trace["metadata"]` |
+| `trace["conversation"]` | `trace["conversations"]` |
+| `trace["status"]` | `trace["completed"]` / `trace["partial"]` |
+| `span_id` / `parent_span_id`（Step） | 已移除，层级信息用 Step 级 `meta` |
+| `input_tokens` / `output_tokens` / `model` / `tags` | 已移除 |
+| `turn.span(...)` | 已移除 |
 
 **SDK 开发者（源码安装）**：
 

@@ -1,6 +1,6 @@
 # Agent 运行轨迹采集 SDK — 现状与待办
 
-> 状态：与代码对齐（v0.1.0 + 契约字段调整，未发新 tag）
+> 状态：与代码对齐（v0.2.0，tag `v0.2.0`；本版为契约破坏性变更）
 > 范围：Python 优先（`requires-python >= 3.9`）
 > 最后更新：2026-09-22
 >
@@ -226,7 +226,7 @@ step 列表（兼容 `conversations` / `conversation` / `messages`），按 `tur
 ### 2.11 发布
 
 走 **git tag** 分发（不依赖私有 PyPI），业务方
-`pip install "git+https://github.com/pfy0/agent_trace_sdk.git@v0.1.0"`。
+`pip install "git+https://github.com/pfy0/agent_trace_sdk.git@v0.2.0"`。
 详见 `docs/distribute.md`。
 
 ---
