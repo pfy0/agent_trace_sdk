@@ -1,0 +1,9 @@
+# 统一换行符为 LF，避免跨平台 diff 噪声
+* text=auto eol=lf
+
+# 二进制文件不要做换行转换
+*.xlsx binary
+*.png binary
+*.jpg binary
+*.ico binary
+*.pdf binary
