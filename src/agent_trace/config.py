@@ -45,6 +45,14 @@ class Config(BaseModel):
     # 导出/上报
     exporters: Optional[list] = Field(default=None)
 
+    # 脱敏：默认开启，覆盖常见凭据与个人标识；可在代码里传 Redactor 覆盖规则
+    redact: bool = Field(default=True)
+    redact_content: bool = Field(default=True, description="是否脱敏 step.content")
+    redact_arguments: bool = Field(
+        default=True, description="是否脱敏 tool_calls[].function.arguments"
+    )
+    redactor: Optional[Any] = Field(default=None, description="自定义 Redactor，优先于开关")
+
     # 运行期开关
     enabled: bool = Field(default=True)
     debug: bool = Field(default=False)
@@ -62,6 +70,9 @@ class Config(BaseModel):
             "source": _env("SOURCE"),
             "enabled": _env_bool("ENABLED", True),
             "debug": _env_bool("DEBUG", False),
+            "redact": _env_bool("REDACT", True),
+            "redact_content": _env_bool("REDACT_CONTENT", True),
+            "redact_arguments": _env_bool("REDACT_ARGUMENTS", True),
         }
         defaults.update(overrides)
         return cls.model_validate(defaults)

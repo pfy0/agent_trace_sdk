@@ -1,6 +1,6 @@
 # Agent 运行轨迹采集 SDK — 现状与待办
 
-> 状态：与代码对齐（v0.4.0；本版为契约破坏性变更：Step 去字段 + 契约收紧）
+> 状态：与代码对齐（v0.4.1；v0.4.0 为契约破坏性变更：Step 去字段 + 契约收紧）
 > 范围：Python 优先（`requires-python >= 3.9`）
 > 最后更新：2026-09-23
 >
@@ -36,6 +36,7 @@ src/agent_trace/
 ├── context.py        # contextvars：当前 turn，支持 async / 并发
 ├── config.py         # 配置：环境变量 + 代码初始化
 ├── ingest.py         # 离线导入：多轮数据按 turn_id 切分（不改动入参）
+├── redact.py         # 脱敏：可配规则擦除凭据 / 个人标识
 ├── integrations/
 │   └── deerflow.py   # DeerFlow / LangGraph 中间件（自动采集轨迹）
 ├── transport/        # HTTP 上报：非阻塞队列 / 重试 / 失败落盘补发
@@ -187,6 +188,9 @@ step 5  tool_response   span=span_C   parent=span_A
 | `AGENT_TRACE_SOURCE` | `source` | 空 |
 | `AGENT_TRACE_ENABLED` | `enabled`（采集总开关） | `true` |
 | `AGENT_TRACE_DEBUG` | `debug`（导出/校验异常是否上抛） | `false` |
+| `AGENT_TRACE_REDACT` | `redact`（脱敏总开关） | `true` |
+| `AGENT_TRACE_REDACT_CONTENT` | `redact_content`（脱敏 `step.content`） | `true` |
+| `AGENT_TRACE_REDACT_ARGUMENTS` | `redact_arguments`（脱敏 `tool_calls.arguments`） | `true` |
 
 另有 `default_completed=True`、`default_partial=False`、`exporters=None`。
 
@@ -224,6 +228,13 @@ step 5  tool_response   span=span_C   parent=span_A
   带 `tool_calls` 的 `AIMessage.content` → `reasoning`；
   末条不带 `tool_calls` 的 AI 文本升级为 `final_answer`；
   `AIMessage.tool_calls` 合并为 1 个 `tool_call` step；`ToolMessage` → `tool_response`。
+- `tool_success` 判定（`ToolMessage.status` 默认值是 `"success"`，不可直接采信）：
+  1. 调用方**显式**设置 status 时按其取值（`model_fields_set` 判定是否显式）；
+  2. 否则按返回文本的错误特征兜底识别 —— `Exit Code: <非0>`、`Std Error:`、
+     `timed out after`、`Error:` 前缀、Python traceback、`command not found`、
+     `No such file or directory`、`Permission denied`（DeerFlow 的 bash 把失败
+     写进文本，status 仍是 success）；
+  3. 都判不出记 `-1`（未知）。
 - 框架注入的 `HumanMessage`（`hide_from_ui`，如 memory 画像、动态上下文）记为
   `reasoning`，来源标签记在 Trace 级 `metadata.deerflow_injected`，不算 `user_query`。
 - 澄清续跑（`ask_clarification` 中断后另起 `run_id`）**并入同一轮 trace**，
@@ -251,7 +262,7 @@ step 列表（兼容 `conversations` / `conversation` / `messages`），按 `tur
 ### 2.11 发布
 
 走 **git tag** 分发（不依赖私有 PyPI），业务方
-`pip install "git+https://github.com/pfy0/agent_trace_sdk.git@v0.4.0"`。
+`pip install "git+https://github.com/pfy0/agent_trace_sdk.git@v0.4.1"`。
 详见 `docs/distribute.md`。
 
 ---
@@ -339,8 +350,11 @@ step 列表（兼容 `conversations` / `conversation` / `messages`），按 `tur
 
 ### 5.3 加工层（合规与容量）
 
-- [ ] 脱敏：密钥 / 手机号 / 邮箱 / 身份证等可配正则，`content` 与
-      `tool_calls.arguments` 分开控制开关。
+- [x] 脱敏：`redact.py` 提供 `Redactor` + 默认规则（API key / `KEY=value`
+      凭据赋值 / JWT / URL 内嵌凭据 / 邮箱 / 手机号 / 身份证 / 银行卡）。
+      默认开启，`content` 与 `tool_calls.arguments` 分开控制
+      （`redact_content` / `redact_arguments`），可传自定义 `redactor` 覆盖规则。
+      生效点在 `Tracer._emit()`：所有导出器拿到的都是已脱敏数据。
 - [ ] 截断：普通字段与 input/output 字段分别设上限。
 - [ ] 超长内容外置到对象存储，表内只留 `content_ref`，并标 `content_truncated`。
 - [ ] 用户 / 租户级 opt-out。

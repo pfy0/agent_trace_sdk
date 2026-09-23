@@ -30,6 +30,7 @@ from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Unio
 
 from . import context as ctx
 from .config import Config
+from .redact import Redactor
 from .schemas import (
     MESSAGE_TYPE_META,
     MessageType,
@@ -497,6 +498,18 @@ class Tracer:
             config = Config.from_env(**overrides)
         self.config = config
         self._exporters: List[Any] = list(exporters or config.exporters or [])
+        self._redactor = self._build_redactor(config)
+
+    @staticmethod
+    def _build_redactor(config: Config) -> Redactor:
+        """按配置构造脱敏器；默认开启，覆盖常见凭据与个人标识。"""
+        if config.redactor is not None:
+            return config.redactor
+        return Redactor(
+            enabled=config.redact,
+            include_content=config.redact_content,
+            include_arguments=config.redact_arguments,
+        )
 
     # ---------- 导出器管理 ----------
 
@@ -504,7 +517,12 @@ class Tracer:
         self._exporters.append(exporter)
 
     def _emit(self, trace: Trace) -> None:
-        """把已校验的 trace 交给每个导出器；单个导出器失败不影响其它。"""
+        """先脱敏，再把 trace 交给每个导出器；单个导出器失败不影响其它。
+
+        脱敏在交给导出器**之前**完成，因此 json / jsonl / xlsx / http 所有
+        出口拿到的都是已擦除的数据，不存在「某个导出器漏脱敏」的可能。
+        """
+        self._redactor.redact_trace(trace)
         for exporter in list(self._exporters):
             try:
                 exporter.export(trace)

@@ -27,6 +27,7 @@ from .exporters import (
     XlsxExporter,
 )
 from .ingest import split_by_turn
+from .redact import RedactionRule, Redactor, default_rules
 from .schemas import (
     MESSAGE_TYPE_META,
     MessageType,
@@ -41,7 +42,7 @@ from .schemas import (
 from .tracer import Tracer, Turn
 from .transport import TransportError
 
-__version__ = "0.4.0"
+__version__ = "0.4.1"
 
 __all__ = [
     "__version__",
@@ -61,6 +62,9 @@ __all__ = [
     "XlsxExporter",
     "HttpExporter",
     "TransportError",
+    "Redactor",
+    "RedactionRule",
+    "default_rules",
     "get_current_turn",
     "generate_id",
     "generate_message_id",

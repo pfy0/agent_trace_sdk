@@ -20,17 +20,29 @@ Agent 运行轨迹采集 SDK。业务方以**最小改动**接入后，SDK 自�
 **业务方（从 GitHub 私有仓库安装）**：
 
 ```bash
-pip install "git+https://github.com/pfy0/agent_trace_sdk.git@v0.4.0"
+pip install "git+https://github.com/pfy0/agent_trace_sdk.git@v0.4.1"
 ```
 
 - 需要：机器能访问 GitHub、装了 `git`、对仓库有读权限。
 - 私有仓库还需带上凭证（SSH key 或 Token）：
-  `pip install "git+ssh://git@github.com/pfy0/agent_trace_sdk.git@v0.4.0"`
+  `pip install "git+ssh://git@github.com/pfy0/agent_trace_sdk.git@v0.4.1"`
 - 装可选依赖（Excel 导出等）：
-  `pip install "agent-trace-sdk[all] @ git+https://github.com/pfy0/agent_trace_sdk.git@v0.4.0"`
+  `pip install "agent-trace-sdk[all] @ git+https://github.com/pfy0/agent_trace_sdk.git@v0.4.1"`
 
 固定 tag 安装，版本可复现。完整说明（Token 配置、升级、离线 wheel、
 DeerFlow/uv 安装）见 `docs/distribute.md`。
+
+### v0.4.1 变更提示（新增默认脱敏 + 修正 tool_success）
+
+**行为变化**：
+
+- **默认开启脱敏**：`step.content` 与 `tool_calls[].function.arguments` 里的
+  凭据 / 个人标识会被替换为 `[REDACTED:规则名]`。需要原始数据时显式关闭：
+  `Tracer(..., redact=False)`，或用 `redact_content` / `redact_arguments`
+  分别控制。详见下方「脱敏」一节。
+- **修正 `tool_success` 误判**：`ToolMessage.status` 的默认值是 `"success"`，
+  旧版直接采信，导致 DeerFlow 里失败的工具调用被记成成功。现在按「显式 status
+  → 返回文本错误特征 → 未知」三层判定，失败会正确记为 `0`。
 
 ### v0.4.0 升级提示（不向后兼容，Step 去字段 + 契约收紧）
 
@@ -239,6 +251,12 @@ plugins:
   动态上下文提醒、待办提醒等）记为 `reasoning`，来源标签记在 Trace 级
   `metadata.deerflow_injected`（值为 `injected` / `dynamic_context`）。判定规则与 DeerFlow 自身的
   `_is_genuine_user_message` 一致：澄清答复虽带 `hide_from_ui`，但仍属真实用户输入。
+- **`tool_success` 判定**：`ToolMessage.status` 的默认值是 `"success"`，直接采信会把
+  失败误判为成功。因此按三层判定：① 调用方显式设置的 status（用 `model_fields_set`
+  区分默认值）；② 返回文本的错误特征（`Exit Code: <非0>` / `Std Error:` /
+  `timed out after` / `Error:` 前缀 / Python traceback / `command not found` /
+  `No such file or directory` / `Permission denied`）——DeerFlow 的 bash 把失败写进
+  文本、status 仍是 success；③ 判不出记 `-1` 未知。
 - 初始 state 里携带的历史消息不会重复采集（以最后一条真实用户消息为界）。
 - 无 langchain 的环境下本模块仍可 import（中间件退化为普通类，便于纯逻辑单测）。
 
@@ -271,6 +289,7 @@ src/agent_trace/
 ├── context.py       # contextvars 上下文传播
 ├── config.py        # 配置：环境变量 + 代码初始化
 ├── ingest.py        # 离线导入与多轮按 turn_id 切分
+├── redact.py        # 脱敏：可配规则擦除凭据 / 个人标识
 ├── integrations/    # 框架适配（deerflow.py）
 ├── transport/       # HTTP 上报：队列 / 重试 / 失败落盘
 └── exporters/       # json / jsonl / xlsx / http / base
@@ -301,6 +320,34 @@ python examples/deerflow_integration.py  # DeerFlow 中间件集成
 | `AGENT_TRACE_SOURCE` | 事件来源入口 | 空 |
 | `AGENT_TRACE_ENABLED` | 采集总开关 | `true` |
 | `AGENT_TRACE_DEBUG` | 导出器异常是否向上抛 | `false` |
+| `AGENT_TRACE_REDACT` | 脱敏总开关 | `true` |
+| `AGENT_TRACE_REDACT_CONTENT` | 脱敏 `step.content` | `true` |
+| `AGENT_TRACE_REDACT_ARGUMENTS` | 脱敏 `tool_calls.arguments` | `true` |
+
+## 脱敏
+
+默认**开启**：在交给导出器之前，按规则擦除 `step.content` 与
+`tool_calls[].function.arguments` 里的敏感信息，命中片段替换为
+`[REDACTED:规则名]`（保留键名，便于排查哪类泄露过）。
+
+默认规则：API key（`sk-` / `apikey-` / Langfuse `lsv2_pt_` 等）、
+`API_KEY=` / `PASSWORD=` 等凭据赋值、JWT、URL 内嵌凭据
+（`postgres://user:pass@host`）、邮箱、手机号、身份证、银行卡号。
+
+```python
+from agent_trace import Tracer, Redactor, RedactionRule
+
+# 整体关闭
+Tracer(agent_id="a", redact=False)
+
+# 只脱敏 content，保留工具参数
+Tracer(agent_id="a", redact_arguments=False)
+
+# 自定义规则（在默认规则基础上追加）
+from agent_trace import default_rules
+rules = default_rules() + [RedactionRule.build("internal_id", r"EMP-\d{6}")]
+Tracer(agent_id="a", redactor=Redactor(rules))
+```
 
 ## 说明
 

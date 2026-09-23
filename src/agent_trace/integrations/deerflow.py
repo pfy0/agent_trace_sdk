@@ -21,6 +21,7 @@
 """
 from __future__ import annotations
 
+import re
 from typing import Any, Dict, List, Optional
 
 from ..schemas import MessageType
@@ -162,6 +163,51 @@ def _injected_label(message: Any) -> Optional[str]:
     if kwargs.get("hide_from_ui"):
         return "injected"
     return None
+
+
+#: ToolMessage 的显式 status 取值；LangChain 默认值是 "success"，
+#: 因此只有它出现在 model_fields_set 里才代表「框架真的判定了成败」。
+_EXPLICIT_SUCCESS_STATUSES = ("success",)
+_EXPLICIT_ERROR_STATUSES = ("error",)
+
+#: DeerFlow 把失败写进返回文本而非 status。以下特征用于兜底识别
+#: （见 sandbox/local/local_sandbox.py 的 Exit Code / Std Error / 超时提示）。
+_TOOL_ERROR_PATTERNS = tuple(
+    re.compile(pattern, re.IGNORECASE)
+    for pattern in (
+        r"\bExit Code:\s*[1-9]\d*",          # 非零退出码
+        r"\bStd Error:",                        # stderr 有内容
+        r"\btimed out after\b",                # 命令超时被终止
+        r"^\s*Error:",                          # 工具直接返回 "Error: ..."
+        r"\bTraceback \(most recent call last\)",  # Python 异常栈
+        r"\bcommand not found\b",
+        r"\bNo such file or directory\b",
+        r"\bPermission denied\b",
+    )
+)
+
+
+def _explicit_tool_status(message: Any) -> Optional[str]:
+    """取出**显式设置**的 ToolMessage.status。
+
+    LangChain 的 ``ToolMessage.status`` 默认值就是 ``"success"``，即使工具
+    失败了也不会变。只有字段出现在 ``model_fields_set`` 里才说明是调用方
+    真正传的，否则一律视为「未判定」。
+    """
+    status = getattr(message, "status", None)
+    if not isinstance(status, str):
+        return None
+    fields_set = getattr(message, "model_fields_set", None)
+    if isinstance(fields_set, (set, frozenset)) and "status" not in fields_set:
+        return None
+    return status
+
+
+def _looks_like_tool_error(text: str) -> bool:
+    """按常见错误特征判断工具返回文本是否代表失败。"""
+    if not text:
+        return False
+    return any(pattern.search(text) for pattern in _TOOL_ERROR_PATTERNS)
 
 
 def _message_key(message: Any) -> str:
@@ -352,12 +398,19 @@ class AgentTraceMiddleware(_AgentMiddleware):
 
         if role == "tool":
             tool_call_id = getattr(message, "tool_call_id", None)
-            msg_status = getattr(message, "status", None)
-            # LangChain 的 ToolMessage.status: "success" / "error"；缺省视为未知
-            if msg_status == "error":
+            # 判定优先级：
+            # 1) 调用方**显式**设置的 status（LangChain 默认值是 "success"，
+            #    不能直接采信，否则失败会被误判为成功）；
+            # 2) 返回文本里的错误特征（DeerFlow 的 bash 把 Exit Code / Std Error /
+            #    超时提示写进文本，status 仍是 success）；
+            # 3) 都判不出时记 -1（未知）。
+            explicit = _explicit_tool_status(message)
+            if explicit in _EXPLICIT_ERROR_STATUSES:
                 tool_success = 0
-            elif msg_status == "success":
+            elif explicit in _EXPLICIT_SUCCESS_STATUSES:
                 tool_success = 1
+            elif _looks_like_tool_error(text):
+                tool_success = 0
             else:
                 tool_success = -1
             turn.record_tool_response(
