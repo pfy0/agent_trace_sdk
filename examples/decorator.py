@@ -46,10 +46,9 @@ def main() -> None:
         print("\n异常已捕获:", exc)
 
     failed = memory.traces[1].serializable()
-    print("completed :", failed["completed"], "| partial:", failed["partial"],
-          "| error:", failed["error"])
+    print("completed :", failed["completed"], "| partial:", failed["partial"])
     print("最后一步:", failed["conversations"][-1]["message_type"],
-          "| completed:", failed["conversations"][-1].get("completed"))
+          "| step 字段:", sorted(failed["conversations"][-1]))
 
 
 if __name__ == "__main__":

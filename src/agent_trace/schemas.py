@@ -77,7 +77,7 @@ def generate_message_id(message_type: Union[MessageType, str], sequence: int) ->
 class ToolCall(BaseModel):
     """单个工具调用对象。字段刻意贴近 OpenAI 的 tool_calls 结构。"""
 
-    model_config = ConfigDict(extra="allow")
+    model_config = ConfigDict(extra="forbid")
 
     id: str = Field(..., description="工具调用 ID，用于与 tool_response 关联")
     type: str = "function"
@@ -87,7 +87,7 @@ class ToolCall(BaseModel):
 class Step(BaseModel):
     """轨迹中的一步 = `conversations` 数组里的一个元素。"""
 
-    model_config = ConfigDict(extra="allow")
+    model_config = ConfigDict(extra="forbid")
 
     message_id: str = Field(..., description="格式 msg_{类型缩写}_{序号}")
     step_no: Optional[int] = Field(default=None, ge=1, description="从 1 递增；由 SDK 统一分配")
@@ -128,16 +128,6 @@ class Step(BaseModel):
     # token 增量（调 LLM 的步骤才有）
     prompt_tokens_delta: Optional[int] = Field(default=None, ge=0)
     completion_tokens_delta: Optional[int] = Field(default=None, ge=0)
-
-    # 结束状态（取代早期的单一 status）
-    completed: Optional[bool] = Field(
-        default=None, description="该步是否正常跑完；False 表示出错中断"
-    )
-    partial: Optional[bool] = Field(
-        default=None, description="该步是否因超时等外部条件被截断"
-    )
-    error: Optional[str] = None
-    meta: Optional[Dict[str, Any]] = None
 
     @field_validator("message_id")
     @classmethod
@@ -185,7 +175,7 @@ class Trace(BaseModel):
     SDK 只留空位。`start_time` / `end_time` 对应采集的起止时刻。
     """
 
-    model_config = ConfigDict(extra="allow")
+    model_config = ConfigDict(extra="forbid")
 
     # 入库侧生成（SDK 留空）
     id: Optional[str] = Field(default=None, description="事件唯一 ID（UUIDV7），入库自动生成")
@@ -232,9 +222,6 @@ class Trace(BaseModel):
     metadata: Optional[Dict[str, Any]] = Field(default=None, description="扩展元数据（自定义标签、版本等）")
     extra_info: Optional[Dict[str, Any]] = Field(default=None, description="扩展业务数据（任意额外字段）")
 
-    duration_ms: Optional[int] = Field(default=None, ge=0)
-    error: Optional[str] = None
-
     @model_validator(mode="after")
     def _validate_turn(self) -> "Trace":
         if not self.conversations:
@@ -274,7 +261,13 @@ class Trace(BaseModel):
         """从上报/导入的裸字典构造 Trace；兼容 messages / conversation / conversations 键名。
 
         若 step 缺少 step_no，按数组顺序自动补 1..N。
+
+        历史数据里可能存在规范外的字段（如 `status`、`timestamp`、Step 级 `meta`），
+        这些字段会被静默丢弃，避免 extra="forbid" 直接报错。
         """
+        step_fields = set(Step.model_fields)
+        call_fields = set(ToolCall.model_fields)
+        trace_fields = set(cls.model_fields)
         data = dict(payload)
         raw_steps = None
         for key in (conversation_key, "conversations", "conversation", "messages"):
@@ -283,11 +276,26 @@ class Trace(BaseModel):
                 break
         if raw_steps is None:
             raise ValueError("未找到 conversations / conversation / messages 数组")
+        # 剥离规范外的 trace 级字段（历史数据可能带 status 等）
+        data = {key: value for key, value in data.items() if key in trace_fields}
 
         steps: List[Dict[str, Any]] = []
         for index, raw in enumerate(raw_steps, start=1):
-            step = dict(raw)
+            step = {
+                key: value
+                for key, value in dict(raw).items()
+                if key in step_fields or key == "timestamp"
+            }
             step.setdefault("step_no", index)
+            # tool_calls 同样按模型字段过滤：OpenAI 风格调用常带 index 等附加键
+            raw_calls = step.get("tool_calls")
+            if isinstance(raw_calls, list):
+                step["tool_calls"] = [
+                    {key: value for key, value in call.items() if key in call_fields}
+                    if isinstance(call, dict)
+                    else call
+                    for call in raw_calls
+                ]
             # 兼容历史数据：只有 timestamp 时映射为 start_time / end_time
             legacy_ts = step.pop("timestamp", None)
             if legacy_ts is not None:

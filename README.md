@@ -20,17 +20,31 @@ Agent 运行轨迹采集 SDK。业务方以**最小改动**接入后，SDK 自�
 **业务方（从 GitHub 私有仓库安装）**：
 
 ```bash
-pip install "git+https://github.com/pfy0/agent_trace_sdk.git@v0.3.0"
+pip install "git+https://github.com/pfy0/agent_trace_sdk.git@v0.4.0"
 ```
 
 - 需要：机器能访问 GitHub、装了 `git`、对仓库有读权限。
 - 私有仓库还需带上凭证（SSH key 或 Token）：
-  `pip install "git+ssh://git@github.com/pfy0/agent_trace_sdk.git@v0.3.0"`
+  `pip install "git+ssh://git@github.com/pfy0/agent_trace_sdk.git@v0.4.0"`
 - 装可选依赖（Excel 导出等）：
-  `pip install "agent-trace-sdk[all] @ git+https://github.com/pfy0/agent_trace_sdk.git@v0.3.0"`
+  `pip install "agent-trace-sdk[all] @ git+https://github.com/pfy0/agent_trace_sdk.git@v0.4.0"`
 
 固定 tag 安装，版本可复现。完整说明（Token 配置、升级、离线 wheel、
 DeerFlow/uv 安装）见 `docs/distribute.md`。
+
+### v0.4.0 升级提示（不向后兼容，Step 去字段 + 契约收紧）
+
+本版收窄了契约，Step 与 Trace 都**只接受规范内字段**：
+
+- **Step 移除 4 个字段**：`completed`、`partial`、`error`、`meta`。
+  结束状态只在 Trace 级；Step 级的扩展信息改用 Trace 级 `metadata`。
+- **Trace 移除 2 个字段**：`duration_ms`、`error`（失败只体现为 `completed=false`）。
+- **`extra="forbid"`**：`Step` / `Trace` / `ToolCall` / `Config` 都不再接受规范外字段。
+  业务方若之前往 step 里塞自定义键（`meta={...}` 或直接 `**extra`），
+  请改为 `Tracer(..., metadata={...})` 或 `Tracer(..., extra_info={...})`；
+  写错的配置名（如 `apps_name=`）现在会直接报错，不再静默失效。
+- `Trace.from_raw()`（离线导入）会自动过滤历史数据里的规范外字段——
+  包括 step 顶层字段与嵌套的 `tool_calls`（OpenAI 风格常带 `index`）——不会因此报错。
 
 ### v0.3.0 升级提示（不向后兼容）
 
@@ -88,8 +102,8 @@ with tracer.turn(turn_id="turn-1", session_id="sess-1", turn_no=1) as turn:
     turn.record_final_answer("今日 AI 要闻速递：……")
 ```
 
-退出 `with` 时 SDK 自动：分配 `step_no` / `message_id`、计算 `duration_ms`、
-校验成 `Trace`、交给每个导出器。异常路径也会落一条终止 step 并把 `completed` 置为 `false`。
+退出 `with` 时 SDK 自动：分配 `step_no` / `message_id`、校验成 `Trace`、
+交给每个导出器。异常路径也会落一条终止 step 并把 Trace 级 `completed` 置为 `false`。
 
 ## 手动埋点 API
 
@@ -101,7 +115,7 @@ with tracer.turn(turn_id="turn-1", session_id="sess-1", turn_no=1) as turn:
 | `turn.record_tool_call(tool_calls)` | 发起工具调用（多个调用合并为 1 个 step） |
 | `turn.record_tool_response(tool_call_id, content)` | 工具返回结果 |
 | `turn.record_final_answer(content)` | 最终交付回答 |
-| `turn.record_error(error)` | 落一条 error 终止 step |
+| `turn.record_error(error)` | 落一条终止 step，并把 Trace 级 `completed` 置为 `false` |
 
 `record_tool_call` 支持多种入参：`("name", arguments)` 元组、`{"name":..., "arguments":...}`、
 OpenAI 风格的完整对象、以及它们的列表。
@@ -123,8 +137,8 @@ step 5  tool_response  tool_call_id: "call_19bc..."   ← 回关到 step 3 的�
   指向它的 `tool_response` 是子（`parent_span_id` 由 SDK 按 `tool_call_id`
   自动回填），业务方无需传。
 - 多 agent 场景下每个 run 各自产出一条 trace，靠 `session_id` 关联。
-- 需要额外归属信息（如"这一步由哪个子 agent 产出"）时，用 `meta` 自由扩展：
-  `turn.record_reasoning("...", meta={"agent": "researcher"})`。
+- 需要额外归属信息（如"这一步由哪个子 agent 产出"）时，用 Trace 级 `metadata` 承载，
+  例如 `Tracer(..., metadata={"agents": ["researcher"]})`。
 
 ## 装饰器
 
@@ -162,7 +176,7 @@ Step 字段（与公司《轨迹数据规范》对齐）：
 - 工具：`tool_calls`、`tool_call_id`、`tool_name`（SDK 自动回填）、
   `tool_success`（-1 未知 / 0 失败 / 1 成功）
 - token：`prompt_tokens_delta` / `completion_tokens_delta`（调 LLM 的步骤才有）
-- 状态：`completed` / `partial` / `error`、`is_follow_up`、`meta`
+- 追问标记：`is_follow_up`（仅 `user_query` 有意义）
 
 > `step_no` 用 Integer（规范文档写的是 String，按实际实现取 Integer）。
 
@@ -176,11 +190,14 @@ Trace 字段（与公司《轨迹数据规范》对齐）：
 - 结束状态：`completed` / `partial`。
 - 统计（可选）：`api_calls`、`toolsets_used`、`tool_stats`、`tool_error_counts`、
   `token_usage`。
-- 扩展（可选）：`metadata`、`extra_info`；另有 `duration_ms` / `error` 两个便捷字段。
+- 扩展（可选）：`metadata`、`extra_info`。
+
+**契约严格性**：`Step` / `Trace` / `ToolCall` / `Config` 都是 `extra="forbid"`，
+写入规范外字段会直接报错（`Trace.from_raw()` 导入历史数据时会先过滤）。
 
 结束状态说明：`completed` = 该轮是否**正常跑完**（异常/中断为 `false`）；
 `partial` = 是否因超时等**外部条件被截断**。两者都可为 true/false 组合，
-取代了早期的单一 `status` 字段。
+取代了早期的单一 `status` 字段。**结束状态只在 Trace 级，Step 级没有**。
 
 `message_id` 校验**只查格式、不查序号连续性**（历史数据存在类型内自增与全局位置两种编号）。
 
@@ -205,22 +222,22 @@ plugins:
 | :--- | :--- |
 | `SystemMessage` | `system_prompt`（随 thread 固定，每轮采一次） |
 | `HumanMessage`（真实用户输入） | `user_query`（同轮第 2 条起自动标 `is_follow_up`） |
-| `HumanMessage`（框架注入，带 `hide_from_ui`） | 不算 `user_query`，记为 `reasoning` 并标 `meta.deerflow_injected` |
+| `HumanMessage`（框架注入，带 `hide_from_ui`） | 不算 `user_query`，记为 `reasoning`；来源标签记在 Trace 级 `metadata.deerflow_injected` |
 | `AIMessage.content`（带 `tool_calls`） | `reasoning` |
 | `AIMessage.content`（收尾那条） | `final_answer` |
 | `AIMessage.tool_calls`（多个） | 合并为 **1 个** `tool_call` step |
-| `ToolMessage` | `tool_response`（带 `tool_call_id`，失败时带 `completed=false`） |
+| `ToolMessage` | `tool_response`（带 `tool_call_id`，失败时 `tool_success=0`） |
 
 - `turn_id` 取 DeerFlow 的 `run_id`，`session_id` 取 `thread_id`；同一 thread 的多轮
   run 各自产出一条 trace，共享 `session_id`。
 - **澄清续跑自动合并**：`ask_clarification` 会中断 run，用户回答后 DeerFlow 另起一个
   `run_id` 继续。此时不新开 trace，而是并入同一轮的 trace（`user_query` 标
-  `is_follow_up` + `meta.clarification_answer`），`turn_id` 沿用最初提问那轮，
+  `is_follow_up`，Trace 级 `metadata.clarification_answer=true`），`turn_id` 沿用最初提问那轮，
   保证「提问 → 反问 → 澄清 → 完成」是一条完整 trace。若用户放弃澄清直接重新提问，
   暂存的澄清轮会被兜底提交，数据不丢。
 - **框架注入的消息不记为用户输入**：带 `hide_from_ui` 的 `HumanMessage`（memory 画像、
-  动态上下文提醒、待办提醒等）记为 `reasoning` 并标 `meta.deerflow_injected`
-  （值为 `injected` / `dynamic_context`）。判定规则与 DeerFlow 自身的
+  动态上下文提醒、待办提醒等）记为 `reasoning`，来源标签记在 Trace 级
+  `metadata.deerflow_injected`（值为 `injected` / `dynamic_context`）。判定规则与 DeerFlow 自身的
   `_is_genuine_user_message` 一致：澄清答复虽带 `hide_from_ui`，但仍属真实用户输入。
 - 初始 state 里携带的历史消息不会重复采集（以最后一条真实用户消息为界）。
 - 无 langchain 的环境下本模块仍可 import（中间件退化为普通类，便于纯逻辑单测）。

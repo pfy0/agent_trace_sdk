@@ -10,14 +10,14 @@
         turn.record_tool_response(tool_call_id="call_1", content="{...}")
         turn.record_final_answer("今日要闻……")
 
-退出 with 时自动：分配 step_no/message_id、计算 duration_ms、校验成 Trace、
-交给导出器。异常路径也会落一条终止 step 并把 completed 置为 false。
+退出 with 时自动：分配 step_no/message_id、校验成 Trace、交给导出器。
+异常路径也会落一条终止 step 并把 Trace 级 completed 置为 false。
 
 层级说明
 --------
 `conversations` 是一维数组，先后顺序由 `step_no` 表达；工具调用与返回之间用
 `tool_calls[].id` <-> `tool_call_id` 关联。不再引入 span 层级字段；若业务方需要
-标注"这一步属于哪个子 agent"等额外信息，用 `meta` 自由扩展。
+标注"这一步属于哪个子 agent"等额外信息，用 Trace 级 `metadata` 承载。
 """
 from __future__ import annotations
 
@@ -90,6 +90,9 @@ def _as_tool_calls(spec: Any) -> List[ToolCall]:
         items = [spec]
 
     calls: List[ToolCall] = []
+    # OpenAI 风格的 tool_call 常带 index 等附加键；ToolCall 已收紧为 extra="forbid"，
+    # 这里按模型字段过滤，只保留契约内的 id / type / function。
+    call_fields = set(ToolCall.model_fields)
     for item in items:
         if isinstance(item, ToolCall):
             calls.append(item)
@@ -112,7 +115,11 @@ def _as_tool_calls(spec: Any) -> List[ToolCall]:
             continue
         if isinstance(item, dict):
             if "id" in item and "function" in item:
-                calls.append(ToolCall.model_validate(item))
+                calls.append(
+                    ToolCall.model_validate(
+                        {key: value for key, value in item.items() if key in call_fields}
+                    )
+                )
                 continue
             name = item.get("name")
             arguments = item.get("arguments")
@@ -142,6 +149,14 @@ class Turn:
         metadata: Optional[Dict[str, Any]] = None,
         **extra: Any,
     ) -> None:
+        # extra 只接受 Trace 已有的字段名（用于按轮覆盖 user_id / source 等）；
+        # 未知键直接报错，避免被契约层 extra="forbid" 静默丢弃。
+        unknown = sorted(set(extra) - set(Trace.model_fields))
+        if unknown:
+            raise TypeError(
+                "Turn 收到未知的 Trace 字段: %s。规范外信息请用 metadata / extra_info 承载"
+                % ", ".join(unknown)
+            )
         self.tracer = tracer
         self.turn_id = turn_id
         self.session_id = session_id
@@ -151,7 +166,6 @@ class Turn:
 
         self.completed = tracer.config.default_completed if completed is None else bool(completed)
         self.partial = bool(partial)
-        self.error: Optional[str] = None
         self.started_at = utc_now()
 
         self._steps: List[Step] = []
@@ -199,10 +213,6 @@ class Turn:
         completion_tokens_delta: Optional[int] = None,
         span_id: Optional[str] = None,
         parent_span_id: Optional[str] = None,
-        completed: Optional[bool] = None,
-        partial: Optional[bool] = None,
-        error: Optional[str] = None,
-        meta: Optional[Dict[str, Any]] = None,
         is_follow_up: Optional[bool] = None,
     ) -> Step:
         if self._committed:
@@ -225,13 +235,8 @@ class Turn:
             if tool_name is None:
                 tool_name = resolved_name
             if tool_success is None:
-                # 拿不到明确状态时记为「未知」；有 completed 信号时据此判断
-                if completed is False:
-                    tool_success = 0
-                elif completed is True:
-                    tool_success = 1
-                else:
-                    tool_success = -1
+                # 拿不到明确状态时记为「未知」
+                tool_success = -1
 
         step = Step(
             message_id=resolved_id,
@@ -250,10 +255,6 @@ class Turn:
             tool_success=tool_success,
             prompt_tokens_delta=prompt_tokens_delta,
             completion_tokens_delta=completion_tokens_delta,
-            completed=completed,
-            partial=partial,
-            error=error,
-            meta=meta,
             is_follow_up=is_follow_up,
         )
         with self._lock:
@@ -324,15 +325,16 @@ class Turn:
         return _StepContext(self, MessageType(message_type), kwargs)
 
     def record_error(self, error: str, content: Optional[str] = None, **kwargs: Any) -> Step:
-        """落一条终止 step，并把整个 turn 标记为 error。"""
+        """落一条终止 step，并把整个 turn 标记为未完成。
+
+        Step 不再承载 `error` / `completed` 字段，失败信息只体现在 Trace 级
+        `completed=False`；`error` 形参保留是为了兼容既有调用。
+        """
         self.completed = False
-        self.error = error
         return self._append(
             MessageType.FINAL_ANSWER,
             content,
             kwargs.pop("start_time", kwargs.pop("timestamp", None)),
-            completed=False,
-            error=error,
             **kwargs,
         )
 
@@ -346,16 +348,9 @@ class Turn:
     def __exit__(self, exc_type, exc, tb) -> bool:
         if exc is not None and self.completed is not False:
             self.completed = False
-            self.error = self.error or ("%s: %s" % (exc_type.__name__, exc))
-            # 异常路径：若还没有终止 step，补一条 error 的 final_answer
+            # 异常路径：若还没有终止 step，补一条终止 final_answer
             if not self._steps or self._steps[-1].message_type is not MessageType.FINAL_ANSWER:
-                self._append(
-                    MessageType.FINAL_ANSWER,
-                    None,
-                    None,
-                    completed=False,
-                    error=self.error,
-                )
+                self._append(MessageType.FINAL_ANSWER, None, None)
         for kind, token in reversed(self._tokens):
             if kind == "turn":
                 ctx.reset_current_turn(token)
@@ -366,7 +361,6 @@ class Turn:
     def as_trace(self) -> Trace:
         """把当前采集结果组装成已校验的 Trace。"""
         ended = utc_now()
-        duration_ms = int((ended - self.started_at).total_seconds() * 1000)
         payload: Dict[str, Any] = {
             "turn_id": self.turn_id,
             "session_id": self.session_id,
@@ -380,10 +374,8 @@ class Turn:
             "source": self.tracer.config.source,
             "start_time": iso_timestamp(self.started_at),
             "end_time": iso_timestamp(ended),
-            "duration_ms": duration_ms,
             "completed": self.completed,
             "partial": self.partial,
-            "error": self.error,
             "metadata": self.metadata or None,
             "conversations": [step.model_dump(mode="python") for step in self._steps],
         }
@@ -418,7 +410,7 @@ class Turn:
 
 
 class _StepContext:
-    """`with turn.step(...) as step:` 自动记录起止时间与 completed。"""
+    """`with turn.step(...) as step:` 自动记录起止时间。"""
 
     def __init__(self, turn: Turn, message_type: MessageType, kwargs: Dict[str, Any]) -> None:
         self.turn = turn
@@ -448,9 +440,8 @@ class _StepContext:
     def __exit__(self, exc_type, exc, tb) -> bool:
         latency_ms = int((utc_now() - self._start).total_seconds() * 1000)
         kwargs = dict(self.kwargs)
-        if exc is not None:
-            kwargs.setdefault("completed", False)
-            kwargs.setdefault("error", "%s: %s" % (exc_type.__name__, exc))
+        # 步骤级出错不落到 step 字段（Step 无 error/completed），异常继续向外抛；
+        # Trace 级的 completed 由 Turn.__exit__ 统一置为 False。
         # content 统一从 kwargs 取出，避免与位置参数重复
         content = kwargs.pop("content", None)
         if self.message_type is MessageType.TOOL_CALL:

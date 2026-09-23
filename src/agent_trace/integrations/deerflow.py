@@ -292,7 +292,7 @@ class AgentTraceMiddleware(_AgentMiddleware):
         # 系统提示词属于历史，却是本轮上下文的一部分，单独采集一次（放在最前）。
         for message in messages[:boundary]:
             if _role_of(message) == "system":
-                turn.record_system_prompt(_text_of(message), meta={"historical": True})
+                turn.record_system_prompt(_text_of(message))
                 break
         entry["system_prompt_done"] = True
         self._turns[key] = entry
@@ -314,32 +314,36 @@ class AgentTraceMiddleware(_AgentMiddleware):
             if key_of in seen:
                 continue
             seen.add(key_of)
-            self._emit_message(turn, message)
+            self._emit_message(turn, message, entry.setdefault("pending_final_ids", set()))
 
-    def _emit_message(self, turn: Turn, message: Any) -> None:
-        """单条 LangChain 消息 -> 一个或多个 step。"""
+    def _emit_message(self, turn: Turn, message: Any, pending_final_ids: set) -> None:
+        """单条 LangChain 消息 -> 一个或多个 step。
+
+        `pending_final_ids` 收集「不带 tool_calls 的 AI 文本」对应的 step 身份，
+        供 after_agent 判定末条 AI 文本是否该升级为 final_answer。
+        """
         role = _role_of(message)
         text = _text_of(message)
 
         if role == "human":
             if not is_genuine_user_message(message):
                 # 框架注入的 human 消息（memory 画像、动态上下文提醒、待办提醒等）
-                # 不是用户输入：单独记一条带来源标记的 step，不算 user_query。
+                # 不是用户输入：记为 reasoning（不算 user_query），来源标签记到
+                # Trace 级 metadata（Step 已无 meta 字段）。
                 label = _injected_label(message) or "injected"
                 if text.strip():
-                    turn._append(
-                        MessageType.REASONING,
-                        text,
-                        None,
-                        meta={"deerflow_injected": label},
-                    )
+                    turn._append(MessageType.REASONING, text, None)
+                    injected = turn.metadata.setdefault("deerflow_injected", [])
+                    if label not in injected:
+                        injected.append(label)
                 return
             # 澄清答复与同轮内第 2 条起的用户输入都算追问
             is_follow_up = is_clarification_answer(message) or any(
                 step.message_type is MessageType.USER_QUERY for step in turn.steps
             )
-            meta = {"clarification_answer": True} if is_clarification_answer(message) else None
-            turn.record_user_query(text, follow_up=is_follow_up, meta=meta)
+            if is_clarification_answer(message):
+                turn.metadata["clarification_answer"] = True
+            turn.record_user_query(text, follow_up=is_follow_up)
             return
 
         if role == "system":
@@ -362,8 +366,6 @@ class AgentTraceMiddleware(_AgentMiddleware):
                 # tool_name 由 SDK 按 tool_call_id 自动回填
                 tool_name=getattr(message, "name", None),
                 tool_success=tool_success,
-                completed=False if tool_success == 0 else None,
-                error=text if tool_success == 0 else None,
             )
             return
 
@@ -374,14 +376,15 @@ class AgentTraceMiddleware(_AgentMiddleware):
                 # 判定规则（与 TerminalResponseMiddleware 的语义对齐）：
                 # - 带 tool_calls 的 AI 文本 = 推理/规划 -> reasoning
                 # - 不带 tool_calls 的 AI 文本 = 候选最终回答 -> 先记为 reasoning，
-                #   若它确实是本轮最后一条 AI 文本，after_agent 会把它升级为 final_answer
-                #   （见 _close_turn 的 pending_ai 处理）
+                #   若它确实是本轮最后一条 AI 文本，after_agent 会升级为 final_answer
+                #   （见 _close_turn 对 pending_final_ids 的处理）
                 turn.record_reasoning(
                     text,
                     prompt_tokens_delta=prompt_delta,
                     completion_tokens_delta=completion_delta,
-                    meta={"pending_final": not calls},
                 )
+                if not calls:
+                    pending_final_ids.add(turn.steps[-1].message_id)
             if calls:
                 turn.record_tool_call(
                     [
@@ -404,14 +407,12 @@ class AgentTraceMiddleware(_AgentMiddleware):
         if entry is None:
             return
         turn: Turn = entry["turn"]
+        pending_final_ids = entry.get("pending_final_ids") or set()
 
         if error:
             turn.completed = False
-            turn.error = error
 
-        # 末条 AI 文本的归宿：若本轮最后一条 step 是带 pending_final 标记的
-        # reasoning，说明它就是本轮最终回答，改写为 final_answer 而不是新增一步。
-        # 末条 AI 文本的归宿：若本轮最后一条 step 是带 pending_final 标记的
+        # 末条 AI 文本的归宿：若本轮最后一条 step 是「候选最终回答」的
         # reasoning（即不带 tool_calls 的 AI 文本），它就是本轮最终回答，
         # 改写为 final_answer 而不是新增一步。
         last = turn.steps[-1] if turn.steps else None
@@ -419,18 +420,11 @@ class AgentTraceMiddleware(_AgentMiddleware):
         if (
             last is not None
             and last.message_type is MessageType.REASONING
-            and (last.meta or {}).get("pending_final")
+            and last.message_id in pending_final_ids
         ):
             last.message_type = MessageType.FINAL_ANSWER
-            if error:
-                last.completed = False
-                last.error = error
             promoted = True
 
-        # pending_final 是内部临时标记，绝不外泄到产出的 trace 里
-        for step in turn.steps:
-            if step.meta and "pending_final" in step.meta:
-                step.meta = {k: v for k, v in step.meta.items() if k != "pending_final"} or None
 
         # 暂存未提交的澄清轮：其最后一步是 ask_clarification 工具调用，
         # 说明 DeerFlow 正中断等待用户回答，后续 run 会带着澄清答复续跑。
@@ -446,11 +440,7 @@ class AgentTraceMiddleware(_AgentMiddleware):
 
         if not promoted and (last is None or last.message_type is not MessageType.FINAL_ANSWER):
             # 本轮没有产出可见回答（例如异常中断）：补一条终止 step
-            turn.record_final_answer(
-                "",
-                completed=False if error else None,
-                error=error,
-            )
+            turn.record_final_answer("")
 
         turn.__exit__(None, None, None)
 

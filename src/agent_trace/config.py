@@ -26,7 +26,8 @@ def _env_bool(name: str, default: bool) -> bool:
 class Config(BaseModel):
     """SDK 全局配置。所有字段都有默认值，可只用环境变量启动。"""
 
-    model_config = ConfigDict(extra="allow")
+    # 拒绝未知键：写错的配置名不会静默失效（Tracer(**config_overrides) 同样生效）
+    model_config = ConfigDict(extra="forbid")
 
     # trace 级默认元数据（对应规范中的业务标识字段）
     agent_id: Optional[str] = Field(default=None)

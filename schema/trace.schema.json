@@ -24,7 +24,7 @@
       "type": "string"
     },
     "Step": {
-      "additionalProperties": true,
+      "additionalProperties": false,
       "description": "轨迹中的一步 = `conversations` 数组里的一个元素。",
       "properties": {
         "message_id": {
@@ -205,57 +205,6 @@
           ],
           "default": null,
           "title": "Completion Tokens Delta"
-        },
-        "completed": {
-          "anyOf": [
-            {
-              "type": "boolean"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "description": "该步是否正常跑完；False 表示出错中断",
-          "title": "Completed"
-        },
-        "partial": {
-          "anyOf": [
-            {
-              "type": "boolean"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "description": "该步是否因超时等外部条件被截断",
-          "title": "Partial"
-        },
-        "error": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Error"
-        },
-        "meta": {
-          "anyOf": [
-            {
-              "additionalProperties": true,
-              "type": "object"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Meta"
         }
       },
       "required": [
@@ -267,7 +216,7 @@
       "type": "object"
     },
     "ToolCall": {
-      "additionalProperties": true,
+      "additionalProperties": false,
       "description": "单个工具调用对象。字段刻意贴近 OpenAI 的 tool_calls 结构。",
       "properties": {
         "id": {
@@ -293,7 +242,7 @@
       "type": "object"
     }
   },
-  "additionalProperties": true,
+  "additionalProperties": false,
   "description": "一次 agent 运行 = 一个 turn = 一轮交互，是采集/校验/上报的基本单位。\n\n`turn_id` 由业务方传入，是 trace 的唯一标识（不再单独引入 trace_id）。\n`session_id` 同样由业务方传入，用于关联同一会话的多个 turn。\n\n字段与公司《轨迹数据规范》对齐；`id` / `create_time` 由入库侧生成，\nSDK 只留空位。`start_time` / `end_time` 对应采集的起止时刻。",
   "properties": {
     "id": {
@@ -581,31 +530,6 @@
       "default": null,
       "description": "扩展业务数据（任意额外字段）",
       "title": "Extra Info"
-    },
-    "duration_ms": {
-      "anyOf": [
-        {
-          "minimum": 0,
-          "type": "integer"
-        },
-        {
-          "type": "null"
-        }
-      ],
-      "default": null,
-      "title": "Duration Ms"
-    },
-    "error": {
-      "anyOf": [
-        {
-          "type": "string"
-        },
-        {
-          "type": "null"
-        }
-      ],
-      "default": null,
-      "title": "Error"
     }
   },
   "required": [

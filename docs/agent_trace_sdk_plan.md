@@ -1,6 +1,6 @@
 # Agent 运行轨迹采集 SDK — 现状与待办
 
-> 状态：与代码对齐（v0.3.0，tag `v0.3.0`；本版为契约破坏性变更）
+> 状态：与代码对齐（v0.4.0；本版为契约破坏性变更：Step 去字段 + 契约收紧）
 > 范围：Python 优先（`requires-python >= 3.9`）
 > 最后更新：2026-09-23
 >
@@ -67,14 +67,17 @@ docs/                 # 本文 + distribute.md（安装与发布）
 `message_id` 格式 `msg_{类型缩写}_{序号}`，序号为**类型内自增**；校验**只查格式**，
 不查序号连续性（历史数据存在按全局位置编号的情况）。
 
-`Step` 字段（与公司《轨迹数据规范》对齐，共 21 个）：`message_id`、`step_no`、
+`Step` 字段（与公司《轨迹数据规范》对齐，共 17 个）：`message_id`、`step_no`、
 `role`、`message_type`、`content`、`start_time`、`end_time`、`latency_ms`、
 `span_id`、`parent_span_id`、`tool_calls`、`tool_call_id`、`tool_name`、
-`tool_success`、`prompt_tokens_delta`、`completion_tokens_delta`、
-`completed`、`partial`、`error`、`is_follow_up`、`meta`。
+`tool_success`、`prompt_tokens_delta`、`completion_tokens_delta`、`is_follow_up`。
 
-> 规范外的保留项：`latency_ms`、`is_follow_up`、`completed`、`partial`、`error`、`meta`。
+> 规范外的保留项：`latency_ms`、`is_follow_up`。
 > `timestamp` 已按要求换成 `start_time` / `end_time`。
+> **Step 不再有 `completed` / `partial` / `error` / `meta`**：结束状态只在 Trace 级，
+> 扩展信息统一走 Trace 级 `metadata`。`Step` / `Trace` / `ToolCall` / `Config`
+> 全部 `extra="forbid"`，规范外字段直接拒绝（`Trace.from_raw()` 导入历史数据时
+> 会按模型字段过滤，不因此报错）。
 
 `Trace` 字段（与公司《轨迹数据规范》逐项对齐，共 27 个）：
 
@@ -86,16 +89,15 @@ docs/                 # 本文 + distribute.md（安装与发布）
 - 结束状态：`completed`、`partial`
 - 统计：`api_calls`、`toolsets_used`、`tool_stats`、`tool_error_counts`、`token_usage`
 - 扩展：`metadata`、`extra_info`
-- 便捷扩展（规范外，保留）：`duration_ms`、`error`
 
 > 已移除的字段：
 > `input_tokens` / `output_tokens` / `model` / `tags`、
 > `agent_name` / `agent_version` / `env`（由 `agent_id` / `app_name` 等取代）、
-> `meta`（trace 级改名为 `metadata`；**Step 级 `meta` 保留不变**）、
+> `meta`（trace 级改名为 `metadata`；**Step 级 `meta` 已移除**）、
 > `started_at` / `ended_at`（改名为 `start_time` / `end_time`）。
 
 结束状态：Trace 级 `completed`（该轮是否真正结束）与 `partial`（是否因超时等外部
-条件截断）取代了早期的单一 `status`；Step 级同样用 `completed` / `partial`。
+条件截断）取代了早期的单一 `status`。**结束状态只在 Trace 级**，Step 级不再有。
 
 校验规则：
 
@@ -112,6 +114,9 @@ docs/                 # 本文 + distribute.md（安装与发布）
 缺 `step_no` 时按数组顺序补 1..N；缺 `turn_no` / `completed` / `partial` /
 `conversations_type` 时取默认值（1 / true / false / `openai`）。
 
+> `Trace.from_raw()` 会按模型字段过滤入参：规范外的 trace 级 / step 级字段
+> （如 `status`、Step 级 `meta`）在导入时被静默丢弃，以兼容历史数据。
+
 ### 2.2 采集层 `tracer.py`
 
 ```python
@@ -124,8 +129,8 @@ with tracer.turn(turn_id="t-1", session_id="s-1") as turn:
     turn.record_final_answer("今日 AI 要闻速递：……")
 ```
 
-- 退出 `with` 时自动分配 `step_no` / `message_id`、计算 `duration_ms`、校验成
-  `Trace` 并交给每个导出器；异常路径会落一条终止 step 并把 `completed` 置为 `false`。
+- 退出 `with` 时自动分配 `step_no` / `message_id`、校验成 `Trace` 并交给每个
+  导出器；异常路径会落一条终止 step，并把 Trace 级 `completed` 置为 `false`。
 - `tracer.turn(turn_no=...)` 传入会话内轮次；`completed` / `partial` 缺省取
   `config.default_completed` / `config.default_partial`。
 - 手动 API：`record_system_prompt` / `record_user_query(follow_up=)` /
@@ -159,7 +164,8 @@ step 5  tool_response   span=span_C   parent=span_A
 
 - 多 agent 场景下每个 run 各自产出一条 trace，靠 `session_id` 关联；
   多 agent 的支持程度与已知限制见第 5 节待办。
-- 需要额外归属信息时用 `meta` 自由扩展（如 `meta={"agent": "researcher"}`）。
+- 需要额外归属信息时用 Trace 级 `metadata` 承载（如
+  `metadata={"agents": ["researcher"]}`）；Step 已无 `meta` 字段。
 
 ### 2.4 上下文 `context.py`
 
@@ -183,6 +189,9 @@ step 5  tool_response   span=span_C   parent=span_A
 | `AGENT_TRACE_DEBUG` | `debug`（导出/校验异常是否上抛） | `false` |
 
 另有 `default_completed=True`、`default_partial=False`、`exporters=None`。
+
+`Config` 同样是 `extra="forbid"`：`Tracer(agent_id=..., apps_name=...)` 这类
+写错的配置名会立即抛 `ValidationError`，不会静默失效。
 
 ### 2.6 导出层 `exporters/`
 
@@ -216,9 +225,10 @@ step 5  tool_response   span=span_C   parent=span_A
   末条不带 `tool_calls` 的 AI 文本升级为 `final_answer`；
   `AIMessage.tool_calls` 合并为 1 个 `tool_call` step；`ToolMessage` → `tool_response`。
 - 框架注入的 `HumanMessage`（`hide_from_ui`，如 memory 画像、动态上下文）记为
-  `reasoning` 并标 `meta.deerflow_injected`，不算 `user_query`。
+  `reasoning`，来源标签记在 Trace 级 `metadata.deerflow_injected`，不算 `user_query`。
 - 澄清续跑（`ask_clarification` 中断后另起 `run_id`）**并入同一轮 trace**，
-  `user_query` 标 `is_follow_up` + `meta.clarification_answer`；用户放弃澄清直接
+  `user_query` 标 `is_follow_up`，并置 Trace 级 `metadata.clarification_answer=true`；
+  用户放弃澄清直接
   重新提问时，暂存的澄清轮会兜底提交，数据不丢。
 - 无 `langchain` 时中间件退化为普通类，仍可 import 做纯逻辑单测。
 
@@ -241,7 +251,7 @@ step 列表（兼容 `conversations` / `conversation` / `messages`），按 `tur
 ### 2.11 发布
 
 走 **git tag** 分发（不依赖私有 PyPI），业务方
-`pip install "git+https://github.com/pfy0/agent_trace_sdk.git@v0.3.0"`。
+`pip install "git+https://github.com/pfy0/agent_trace_sdk.git@v0.4.0"`。
 详见 `docs/distribute.md`。
 
 ---
@@ -256,23 +266,23 @@ step 列表（兼容 `conversations` / `conversation` / `messages`），按 `tur
 | `turn_no` | 会话内第几轮，业务方传入，缺省 1 | `schemas.Trace` |
 | 字段名 | 步骤数组用 `conversations`（复数，数组类型） | `schemas.Trace` |
 | `conversations_type` | 会话格式标识，业务方传入，缺省 `openai` | `schemas.Trace` |
-| 结束状态 | 用 `completed` + `partial` 取代单一 `status`（Trace 与 Step 都换） | `schemas.py` |
+| 结束状态 | 用 `completed` + `partial` 取代单一 `status`；**仅 Trace 级**，Step 不再有 | `schemas.py` |
 | 必填性 | 新字段都给安全默认值，不破坏既有调用 | `schemas.py` / `config.py` |
 | 字段集 | Trace 级与公司《轨迹数据规范》逐项对齐（27 字段） | `schemas.Trace` |
 | 智能体身份 | `agent_id` / `parent_agent_id` 取代 `agent_name` / `agent_version` / `env` | `config.py` |
 | 时间字段 | `start_time` / `end_time` 取代 `started_at` / `ended_at` | `schemas.Trace` |
-| 扩展元数据 | Trace 级为 `metadata`；**Step 级 `meta` 不动** | `schemas.py` |
+| 扩展元数据 | 只在 Trace 级，字段名 `metadata`；**Step 级 `meta` 已移除** | `schemas.py` |
 | 入库字段 | `id` / `create_time` 由入库侧生成，SDK 留空 | `schemas.Trace` |
 | 多轮数据 | 一个 trace 只收一轮；多轮切分只能按 `turn_id`（`split_by_turn`） | `ingest.py` |
 | 同轮多条用户输入 | 不切分，第 2 条起标 `is_follow_up=True` | `schemas.Step` |
 | `message_id` 序号 | 类型内自增；校验只查格式 | `schemas.py` |
 | `tool_call` 粒度 | 一条消息 = 一个 step，多个调用合并进 `tool_calls` | `tracer.py` |
-| Step 字段集 | 与规范对齐（21 字段）；`timestamp` 拆成 `start_time` / `end_time` | `schemas.Step` |
+| Step 字段集 | 与规范对齐（17 字段）；`timestamp` 拆成 `start_time` / `end_time` | `schemas.Step` |
 | span 树 | 规则 B：`tool_call` 为父、`tool_response` 为子，SDK 全自动 | `tracer.py` |
 | `tool_name` / `tool_success` | `tool_name` 按 `tool_call_id` 自动回填；`tool_success` 取 -1/0/1 | `tracer.py` |
 | Step 时间 | 有耗时则 `end_time = start_time + latency_ms`，否则 `end_time = start_time` | `tracer.py` |
 | token 增量 | Step 级 `prompt_tokens_delta` / `completion_tokens_delta`（调 LLM 时才有） | `schemas.Step` |
-| 耗时字段 | Step 只有 `latency_ms`；Trace 有 `duration_ms` | `schemas.py` |
+| 耗时字段 | Step 只有 `latency_ms`；Trace 不设耗时字段 | `schemas.py` |
 | 依赖策略 | 核心仅 `pydantic`；`xlsx` / `http` / `deerflow` 为 optional extras | `pyproject.toml` |
 | 发布渠道 | git tag，不依赖私有 PyPI | `tools/release.py` |
 
@@ -293,7 +303,7 @@ step 列表（兼容 `conversations` / `conversation` / `messages`），按 `tur
 | 规划 `sanitize.py`、`exporters/otlp.py`、`integrations/openai.py` | 尚未实现，见第 5 节 |
 | `xlsx.py` 提供 `split_tool_calls` 开关 | 未实现；当前恒为「一条消息 = 一行」 |
 | 超长内容外置 `content_ref` / 截断 | 未实现，见第 5 节 |
-| Step 级 `status` | 已换成 `completed` + `partial` |
+| Step 级 `status` | 已移除；结束状态只在 Trace 级 |
 
 ---
 
@@ -307,6 +317,9 @@ step 列表（兼容 `conversations` / `conversation` / `messages`），按 `tur
       contextvars 并发隔离、spool 落盘与补发、各导出器输出。
 - [ ] `HttpExporter.close()` 目前只停后台线程，不 flush 队列里剩余的数据；
       进程退出（`atexit`）时可能丢尾部数据，需要补一次收尾 flush。
+- [x] 契约已全部收紧为 `extra="forbid"`（`Step` / `Trace` / `ToolCall` / `Config`）。
+      OpenAI 风格的 tool_call 常带 `index` 等附加键，`_as_tool_calls()` 与
+      `Trace.from_raw()` 会先按模型字段过滤再校验。
 
 ### 5.2 多 agent 支持（已知限制）
 
@@ -321,8 +334,8 @@ step 列表（兼容 `conversations` / `conversation` / `messages`），按 `tur
 - [ ] **子 agent 内的步骤归属无法表达**：若多个子 agent 共用同一 `run_id` 且消息
       交错，`step_no` 只能给顺序、给不出分组。当前 span 规则 B 只能表达
       「工具调用 → 返回」，表达不了「哪些 step 属于同一个子 agent」，暂借
-      `meta`（如 `meta={"agent": "researcher"}`）由业务方自标；若将来需要自动还原，
-      再评估是否引入「tool_call 派生子 agent」的信号（原路线 C）。
+      Trace 级 `metadata`（如 `metadata={"agents": ["researcher"]}`）由业务方自标；
+      若将来需要自动还原，再评估是否引入「tool_call 派生子 agent」的信号（原路线 C）。
 
 ### 5.3 加工层（合规与容量）
 
@@ -336,7 +349,7 @@ step 列表（兼容 `conversations` / `conversation` / `messages`），按 `tur
 
 - [ ] Collector 服务（校验 / 补齐 / 限流）——由谁实现待定。
 - [ ] ClickHouse 建表 DDL（草案见早期规划，需按当前字段重写：`turn_id` 取代
-      `turn_id`，Step 含 `step_no` / `latency_ms` / `completed` / `meta` 等）。
+      `turn_id`，Step 含 `step_no` / `latency_ms` / `tool_success` 等）。
 - [ ] 去重键与引擎选型（只追加则 `MergeTree` 系；需要补写则定版本列）。
 
 ### 5.5 适配与桥接
