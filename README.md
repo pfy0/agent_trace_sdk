@@ -275,7 +275,7 @@ agent = create_agent(model=..., tools=[...], middleware=[AgentTraceMiddleware(tr
 
 ```bash
 python tools/release.py --build-only     # 只出包，产物在 dist/
-python tools/release.py --tag            # 构建 + 校验 + 打版本 tag 并推送
+python tools/release.py --tag            # 构建 + 校验 + 推分支 + 打 tag 并推送
 ```
 
 业务方固定 tag 安装即可复现版本。完整说明见 `docs/distribute.md`。

@@ -35,7 +35,12 @@ git push origin main
 python tools/release.py --tag
 ```
 
-脚本会：清理构建目录 → `python -m build` → `twine check` → 打 `v<version>` 注释 tag → `git push origin v<version>`。
+脚本会：清理构建目录 → `python -m build` → `twine check` → **推送当前分支** →
+打 `v<version>` 注释 tag → `git push origin v<version>`。
+
+> 先推分支再推 tag：保证 tag 指向的提交在远端分支上可达，避免出现
+> 「tag 存在但 main 落后」的错位（业务方按 tag 装到的版本与分支不一致，排查困难）。
+> 分支已同步时会自动跳过推送。
 
 只想本地演练：`python tools/release.py --tag --no-push`。
 只出包不上传：`python tools/release.py --build-only`（产物在 `dist/`）。

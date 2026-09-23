@@ -67,6 +67,15 @@ def capture(cmd: list) -> str:
     return result.stdout.strip()
 
 
+def try_capture(cmd: list) -> str:
+    """执行 git 命令并把 stdout 原样返回；失败时返回空串。
+
+    用于「命令失败是正常情况」的探测（如分支没有配置上游）。
+    """
+    result = subprocess.run(cmd, cwd=str(ROOT), capture_output=True, text=True)
+    return result.stdout.strip() if result.returncode == 0 else ""
+
+
 def clean() -> None:
     for name in ("dist", "build"):
         path = ROOT / name
@@ -85,8 +94,39 @@ def check() -> None:
     run([sys.executable, "-m", "twine", "check", *map(str, sorted(DIST.glob("*")))])
 
 
+def push_branch() -> None:
+    """把当前分支推到 origin。
+
+    必须先推分支再推 tag：否则 tag 会指向一个远端 main 上不存在的提交，
+    ``pip install git+...#egg`` 这类按 tag 拉取的方式会拿到「游离」的提交，
+    让人误以为版本已发布而实际上分支落后。已同步时跳过，避免多余的网络请求。
+    """
+    branch = capture(["git", "rev-parse", "--abbrev-ref", "HEAD"])
+    if branch == "HEAD":  # 游离头指针，没有分支可推
+        print("提示：当前处于游离 HEAD，跳过分支推送。")
+        return
+
+    upstream = try_capture(
+        ["git", "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}"]
+    )
+    if not upstream:
+        run(["git", "push", "-u", "origin", branch])
+        print("已推送分支 %s（并设置上游）" % branch)
+        return
+
+    ahead = capture(["git", "rev-list", "--count", "%s..%s" % (upstream, branch)])
+    if ahead == "0":
+        print("分支 %s 已与 %s 同步，无需推送" % (branch, upstream))
+        return
+    run(["git", "push", "origin", branch])
+    print("已推送分支 %s（%s 个提交）" % (branch, ahead))
+
+
 def make_tag(tag: str, push: bool) -> None:
-    """打带注释的版本 tag（git 安装的版本锚点），可选推送。"""
+    """打带注释的版本 tag（git 安装的版本锚点），可选推送。
+
+    推送时**先推分支、再推 tag**：保证 tag 指向的提交在远端分支上可达。
+    """
     existing = capture(["git", "tag", "--list", tag])
     if existing:
         raise SystemExit("tag %s 已存在。改 pyproject.toml 的版本号，或先删除该 tag。" % tag)
@@ -95,13 +135,19 @@ def make_tag(tag: str, push: bool) -> None:
     if dirty:
         print("提示：工作区有未提交改动，tag 指向的是最后一次提交：\n%s\n" % dirty)
 
+    if not push:
+        head = capture(["git", "rev-parse", "--short", "HEAD"])
+        run(["git", "tag", "-a", tag, "-m", "agent-trace-sdk %s" % tag])
+        print("已打 tag %s（指向 %s）" % (tag, head))
+        print("未推送（--no-push）。推送后业务方才能安装该版本。")
+        return
+
+    # 先推分支，再打 tag：避免 tag 指向远端不存在的提交
+    push_branch()
+
     head = capture(["git", "rev-parse", "--short", "HEAD"])
     run(["git", "tag", "-a", tag, "-m", "agent-trace-sdk %s" % tag])
     print("已打 tag %s（指向 %s）" % (tag, head))
-
-    if not push:
-        print("未推送（--no-push）。推送后业务方才能安装该版本。")
-        return
     run(["git", "push", "origin", tag])
     print("已推送 tag %s" % tag)
 
