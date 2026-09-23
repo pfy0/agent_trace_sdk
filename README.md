@@ -20,7 +20,7 @@ Agent 运行轨迹采集 SDK。业务方以**最小改动**接入后，SDK 自�
 **业务方（从 GitHub 私有仓库安装）**：
 
 ```bash
-pip install "git+https://github.com/pfy0/agent_trace_sdk.git@v0.4.1"
+pip install "git+https://github.com/pfy0/agent_trace_sdk.git@v0.4.2"
 ```
 
 - 需要：机器能访问 GitHub、装了 `git`、对仓库有读权限。
@@ -31,6 +31,12 @@ pip install "git+https://github.com/pfy0/agent_trace_sdk.git@v0.4.1"
 
 固定 tag 安装，版本可复现。完整说明（Token 配置、升级、离线 wheel、
 DeerFlow/uv 安装）见 `docs/distribute.md`。
+
+### v0.4.2 变更提示（conversations_type 默认值变更）
+
+- **`conversations_type` 默认值**：`openai` → `openai_messages`。
+  下游若按 `conversations_type == "openai"` 过滤或入库，需要同步调整。
+  显式传入该字段的调用不受影响。
 
 ### v0.4.1 变更提示（新增默认脱敏 + 修正 tool_success）
 
@@ -198,7 +204,8 @@ Trace 字段（与公司《轨迹数据规范》对齐）：
   `start_time` / `end_time`（ISO 8601 UTC）、`id` / `create_time`（入库侧生成，SDK 留空）。
 - 业务标识：`app_name`、`app_id`、`system_code`、`user_id`、`source`、
   `agent_id`、`parent_agent_id`。
-- 会话内容：`conversations_type` 与 `conversations`（该轮全部 step 的数组）。
+- 会话内容：`conversations_type`（缺省 `openai_messages`）与 `conversations`
+  （该轮全部 step 的数组）。
 - 结束状态：`completed` / `partial`。
 - 统计（可选）：`api_calls`、`toolsets_used`、`tool_stats`、`tool_error_counts`、
   `token_usage`。

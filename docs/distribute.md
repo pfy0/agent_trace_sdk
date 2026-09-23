@@ -5,7 +5,7 @@
 ```
 SDK 维护者                          GitHub 私有仓库                业务方环境
 ──────────                          ──────────────                ─────────
-python tools/release.py --tag  ──►  tag v0.4.1 + main      ◄──     pip install "git+...@v0.4.1"
+python tools/release.py --tag  ──►  tag v0.4.2 + main      ◄──     pip install "git+...@v0.4.2"
 （打 tag 并 push）                  （存放源码）                   （需要读权限）
 ```
 

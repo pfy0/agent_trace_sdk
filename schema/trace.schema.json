@@ -407,7 +407,7 @@
       "title": "Parent Agent Id"
     },
     "conversations_type": {
-      "default": "openai",
+      "default": "openai_messages",
       "description": "会话格式标识：openai messages / sharegpt / 自定义 等",
       "title": "Conversations Type",
       "type": "string"

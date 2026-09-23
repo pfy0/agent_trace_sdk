@@ -204,7 +204,7 @@ class Trace(BaseModel):
     parent_agent_id: Optional[str] = Field(default=None, description="子智能体对应的父智能体 ID")
 
     conversations_type: str = Field(
-        default="openai",
+        default="openai_messages",
         description="会话格式标识：openai messages / sharegpt / 自定义 等",
     )
     conversations: List[Step] = Field(default_factory=list, description="该轮的全部步骤")

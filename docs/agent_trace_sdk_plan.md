@@ -1,6 +1,6 @@
 # Agent 运行轨迹采集 SDK — 现状与待办
 
-> 状态：与代码对齐（v0.4.1；v0.4.0 为契约破坏性变更：Step 去字段 + 契约收紧）
+> 状态：与代码对齐（v0.4.2；v0.4.0 为契约破坏性变更：Step 去字段 + 契约收紧）
 > 范围：Python 优先（`requires-python >= 3.9`）
 > 最后更新：2026-09-23
 >
@@ -113,7 +113,7 @@ docs/                 # 本文 + distribute.md（安装与发布）
 
 `Trace.from_raw()` 兼容 `conversations` / `conversation` / `messages` 三种数组键名，
 缺 `step_no` 时按数组顺序补 1..N；缺 `turn_no` / `completed` / `partial` /
-`conversations_type` 时取默认值（1 / true / false / `openai`）。
+`conversations_type` 时取默认值（1 / true / false / `openai_messages`）。
 
 > `Trace.from_raw()` 会按模型字段过滤入参：规范外的 trace 级 / step 级字段
 > （如 `status`、Step 级 `meta`）在导入时被静默丢弃，以兼容历史数据。
@@ -262,7 +262,7 @@ step 列表（兼容 `conversations` / `conversation` / `messages`），按 `tur
 ### 2.11 发布
 
 走 **git tag** 分发（不依赖私有 PyPI），业务方
-`pip install "git+https://github.com/pfy0/agent_trace_sdk.git@v0.4.1"`。
+`pip install "git+https://github.com/pfy0/agent_trace_sdk.git@v0.4.2"`。
 详见 `docs/distribute.md`。
 
 ---
@@ -276,7 +276,7 @@ step 列表（兼容 `conversations` / `conversation` / `messages`），按 `tur
 | `turn_id` / `session_id` | 由业务方传入；缺省时 SDK 生成（`turn_xxx` / `sess_xxx`） | `Tracer.turn()` |
 | `turn_no` | 会话内第几轮，业务方传入，缺省 1 | `schemas.Trace` |
 | 字段名 | 步骤数组用 `conversations`（复数，数组类型） | `schemas.Trace` |
-| `conversations_type` | 会话格式标识，业务方传入，缺省 `openai` | `schemas.Trace` |
+| `conversations_type` | 会话格式标识，业务方传入，缺省 `openai_messages` | `schemas.Trace` |
 | 结束状态 | 用 `completed` + `partial` 取代单一 `status`；**仅 Trace 级**，Step 不再有 | `schemas.py` |
 | 必填性 | 新字段都给安全默认值，不破坏既有调用 | `schemas.py` / `config.py` |
 | 字段集 | Trace 级与公司《轨迹数据规范》逐项对齐（27 字段） | `schemas.Trace` |
