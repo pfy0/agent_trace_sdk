@@ -5,7 +5,7 @@
 ```
 SDK 维护者                          GitHub 私有仓库                业务方环境
 ──────────                          ──────────────                ─────────
-python tools/release.py --tag  ──►  tag v0.2.0 + main      ◄──     pip install "git+...@v0.2.0"
+python tools/release.py --tag  ──►  tag v0.3.0 + main      ◄──     pip install "git+...@v0.3.0"
 （打 tag 并 push）                  （存放源码）                   （需要读权限）
 ```
 
@@ -61,7 +61,7 @@ python tools/release.py --tag
 ### 方式 1：SSH（有配好 SSH key 时最省心）
 
 ```bash
-pip install "git+ssh://git@github.com/pfy0/agent_trace_sdk.git@v0.2.0"
+pip install "git+ssh://git@github.com/pfy0/agent_trace_sdk.git@v0.3.0"
 ```
 
 ### 方式 2：HTTPS + Personal Access Token
@@ -70,7 +70,7 @@ pip install "git+ssh://git@github.com/pfy0/agent_trace_sdk.git@v0.2.0"
 带 `repo` 读权限的 Token，然后：
 
 ```bash
-pip install "git+https://<TOKEN>@github.com/pfy0/agent_trace_sdk.git@v0.2.0"
+pip install "git+https://<TOKEN>@github.com/pfy0/agent_trace_sdk.git@v0.3.0"
 ```
 
 > Token 会出现在命令历史/pip 日志里，注意别外泄；用环境变量或凭据管理器更安全。
@@ -79,7 +79,7 @@ pip install "git+https://<TOKEN>@github.com/pfy0/agent_trace_sdk.git@v0.2.0"
 
 ```bash
 git config --global credential.helper manager     # 首次会弹窗登录
-pip install "git+https://github.com/pfy0/agent_trace_sdk.git@v0.2.0"
+pip install "git+https://github.com/pfy0/agent_trace_sdk.git@v0.3.0"
 ```
 
 ### 装可选依赖
@@ -87,13 +87,13 @@ pip install "git+https://github.com/pfy0/agent_trace_sdk.git@v0.2.0"
 `git+...` 的地址后面可以带 extras：
 
 ```bash
-pip install "agent-trace-sdk[xlsx] @ git+https://github.com/pfy0/agent_trace_sdk.git@v0.2.0"
-pip install "agent-trace-sdk[all] @ git+ssh://git@github.com/pfy0/agent_trace_sdk.git@v0.2.0"
+pip install "agent-trace-sdk[xlsx] @ git+https://github.com/pfy0/agent_trace_sdk.git@v0.3.0"
+pip install "agent-trace-sdk[all] @ git+ssh://git@github.com/pfy0/agent_trace_sdk.git@v0.3.0"
 ```
 
 ### 升级 / 换版本
 
-`@v0.2.0` 换成目标 tag 重新装即可（pip 会重装）：
+`@v0.3.0` 换成目标 tag 重新装即可（pip 会重装）：
 
 ```bash
 pip install --force-reinstall "git+https://github.com/pfy0/agent_trace_sdk.git@v0.1.1"
@@ -114,14 +114,14 @@ python -c "import agent_trace; print(agent_trace.__version__, agent_trace.__file
 DeerFlow 后端用的是 `uv`，语法一致：
 
 ```bash
-uv pip install --python .venv/Scripts/python.exe "git+https://github.com/pfy0/agent_trace_sdk.git@v0.2.0"
+uv pip install --python .venv/Scripts/python.exe "git+https://github.com/pfy0/agent_trace_sdk.git@v0.3.0"
 ```
 
 或写进它的 `pyproject.toml` 依赖里，长期固定版本：
 
 ```toml
 dependencies = [
-    "agent-trace-sdk @ git+https://github.com/pfy0/agent_trace_sdk.git@v0.2.0",
+    "agent-trace-sdk @ git+https://github.com/pfy0/agent_trace_sdk.git@v0.3.0",
 ]
 ```
 
