@@ -32,6 +32,20 @@
           "title": "Message Id",
           "type": "string"
         },
+        "step_no": {
+          "anyOf": [
+            {
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "从 1 递增；由 SDK 统一分配",
+          "title": "Step No"
+        },
         "role": {
           "$ref": "#/$defs/Role"
         },
@@ -51,24 +65,23 @@
           "description": "tool_call 时为 null",
           "title": "Content"
         },
-        "timestamp": {
-          "description": "ISO 8601 时间戳",
-          "title": "Timestamp",
+        "start_time": {
+          "description": "开始的 ISO 8601 时间戳（UTC）",
+          "title": "Start Time",
           "type": "string"
         },
-        "step_no": {
+        "end_time": {
           "anyOf": [
             {
-              "minimum": 1,
-              "type": "integer"
+              "type": "string"
             },
             {
               "type": "null"
             }
           ],
           "default": null,
-          "description": "从 1 递增；由 SDK 统一分配",
-          "title": "Step No"
+          "description": "结束的 ISO 8601 时间戳（UTC）；缺省时等于 start_time",
+          "title": "End Time"
         },
         "latency_ms": {
           "anyOf": [
@@ -82,6 +95,24 @@
           ],
           "default": null,
           "title": "Latency Ms"
+        },
+        "span_id": {
+          "description": "跨度 ID，SDK 自动生成",
+          "title": "Span Id",
+          "type": "string"
+        },
+        "parent_span_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "父跨度 ID",
+          "title": "Parent Span Id"
         },
         "is_follow_up": {
           "anyOf": [
@@ -122,6 +153,58 @@
           ],
           "default": null,
           "title": "Tool Call Id"
+        },
+        "tool_name": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "工具名称，由 SDK 自动回填",
+          "title": "Tool Name"
+        },
+        "tool_success": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "工具调用结果：-1 未知 / 0 失败 / 1 成功",
+          "title": "Tool Success"
+        },
+        "prompt_tokens_delta": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Prompt Tokens Delta"
+        },
+        "completion_tokens_delta": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Completion Tokens Delta"
         },
         "completed": {
           "anyOf": [
@@ -178,8 +261,7 @@
       "required": [
         "message_id",
         "role",
-        "message_type",
-        "timestamp"
+        "message_type"
       ],
       "title": "Step",
       "type": "object"

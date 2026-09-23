@@ -17,10 +17,17 @@ COLUMNS = [
     "role",
     "message_type",
     "content",
-    "timestamp",
+    "start_time",
+    "end_time",
+    "latency_ms",
+    "span_id",
+    "parent_span_id",
     "tool_calls",
     "tool_call_id",
-    "latency_ms",
+    "tool_name",
+    "tool_success",
+    "prompt_tokens_delta",
+    "completion_tokens_delta",
 ]
 
 COLUMN_WIDTHS = {
@@ -29,10 +36,17 @@ COLUMN_WIDTHS = {
     "role": 11,
     "message_type": 14,
     "content": 70,
-    "timestamp": 25,
+    "start_time": 25,
+    "end_time": 25,
+    "latency_ms": 11,
+    "span_id": 38,
+    "parent_span_id": 38,
     "tool_calls": 55,
     "tool_call_id": 28,
-    "latency_ms": 11,
+    "tool_name": 18,
+    "tool_success": 13,
+    "prompt_tokens_delta": 18,
+    "completion_tokens_delta": 22,
 }
 
 
@@ -55,10 +69,17 @@ def trace_to_rows(trace: Trace) -> List[Dict[str, Any]]:
                 "role": step.role.value,
                 "message_type": step.message_type.value,
                 "content": to_cell(step.content),
-                "timestamp": step.timestamp,
+                "start_time": step.start_time,
+                "end_time": step.end_time,
+                "latency_ms": step.latency_ms,
+                "span_id": step.span_id,
+                "parent_span_id": step.parent_span_id,
                 "tool_calls": to_cell(tool_calls),
                 "tool_call_id": tool_call_id,
-                "latency_ms": step.latency_ms,
+                "tool_name": step.tool_name,
+                "tool_success": step.tool_success,
+                "prompt_tokens_delta": step.prompt_tokens_delta,
+                "completion_tokens_delta": step.completion_tokens_delta,
             }
         )
 

@@ -67,9 +67,14 @@ docs/                 # 本文 + distribute.md（安装与发布）
 `message_id` 格式 `msg_{类型缩写}_{序号}`，序号为**类型内自增**；校验**只查格式**，
 不查序号连续性（历史数据存在按全局位置编号的情况）。
 
-`Step` 字段：`message_id`、`role`、`message_type`、`content`、`timestamp`、
-`step_no`、`latency_ms`、`is_follow_up`、`tool_calls`、`tool_call_id`、
-`completed`、`partial`、`error`、`meta`。
+`Step` 字段（与公司《轨迹数据规范》对齐，共 21 个）：`message_id`、`step_no`、
+`role`、`message_type`、`content`、`start_time`、`end_time`、`latency_ms`、
+`span_id`、`parent_span_id`、`tool_calls`、`tool_call_id`、`tool_name`、
+`tool_success`、`prompt_tokens_delta`、`completion_tokens_delta`、
+`completed`、`partial`、`error`、`is_follow_up`、`meta`。
+
+> 规范外的保留项：`latency_ms`、`is_follow_up`、`completed`、`partial`、`error`、`meta`。
+> `timestamp` 已按要求换成 `start_time` / `end_time`。
 
 `Trace` 字段（与公司《轨迹数据规范》逐项对齐，共 27 个）：
 
@@ -83,7 +88,7 @@ docs/                 # 本文 + distribute.md（安装与发布）
 - 扩展：`metadata`、`extra_info`
 - 便捷扩展（规范外，保留）：`duration_ms`、`error`
 
-> 已移除的字段：`span_id` / `parent_span_id`（层级改用顺序 + `meta`）、
+> 已移除的字段：
 > `input_tokens` / `output_tokens` / `model` / `tags`、
 > `agent_name` / `agent_version` / `env`（由 `agent_id` / `app_name` 等取代）、
 > `meta`（trace 级改名为 `metadata`；**Step 级 `meta` 保留不变**）、
@@ -137,10 +142,20 @@ with tracer.turn(turn_id="t-1", session_id="s-1") as turn:
   warning 并丢弃该 trace，不把 `ValidationError` 抛给业务方；`config.debug=True`
   时才向上抛。
 
-### 2.3 先后顺序与工具关联
+### 2.3 先后顺序、工具关联与 span 树
 
 `conversations` 是一维数组，先后顺序由 `step_no` 表达；工具调用与返回用
-`tool_calls[].id` <-> `tool_call_id` 关联。**不引入 span 层级字段。**
+`tool_calls[].id` <-> `tool_call_id` 关联。
+
+**span 树（规则 B，全自动）**：每个 step 分配 `span_id`；`tool_call` 是父，
+指向它的 `tool_response` 是子——`parent_span_id` 由 SDK 顺着 `tool_call_id`
+自动回填，业务方无需传，也不需要 `turn.span()`：
+
+```
+step 3  tool_call       span=span_A   parent=null
+step 4  tool_response   span=span_B   parent=span_A   (tool_call_id 指向 step 3 的调用)
+step 5  tool_response   span=span_C   parent=span_A
+```
 
 - 多 agent 场景下每个 run 各自产出一条 trace，靠 `session_id` 关联；
   多 agent 的支持程度与已知限制见第 5 节待办。
@@ -177,7 +192,7 @@ with tracer.turn(turn_id="t-1", session_id="s-1") as turn:
 | `MemoryExporter` | 留在内存，便于测试 |
 | `JsonExporter` | 汇总为单个 JSON 数组，原子写（tmp + replace），按 `flush_every` 落盘 |
 | `JsonlExporter` | 一行一个 step（带 trace 元数据），便于 jq / 灌 CK |
-| `XlsxExporter` | 展平成一行一个 step 的 Excel（列：`step_no, message_id, role, message_type, content, timestamp, tool_calls, tool_call_id, latency_ms`），依赖可选 `openpyxl` |
+| `XlsxExporter` | 展平成一行一个 step 的 Excel（列：`step_no, message_id, role, message_type, content, start_time, end_time, latency_ms, span_id, parent_span_id, tool_calls, tool_call_id, tool_name, tool_success, prompt_tokens_delta, completion_tokens_delta`），依赖可选 `openpyxl` |
 | `HttpExporter` | 见 2.7 |
 
 ### 2.7 传输层 `transport/`
@@ -252,6 +267,11 @@ step 列表（兼容 `conversations` / `conversation` / `messages`），按 `tur
 | 同轮多条用户输入 | 不切分，第 2 条起标 `is_follow_up=True` | `schemas.Step` |
 | `message_id` 序号 | 类型内自增；校验只查格式 | `schemas.py` |
 | `tool_call` 粒度 | 一条消息 = 一个 step，多个调用合并进 `tool_calls` | `tracer.py` |
+| Step 字段集 | 与规范对齐（21 字段）；`timestamp` 拆成 `start_time` / `end_time` | `schemas.Step` |
+| span 树 | 规则 B：`tool_call` 为父、`tool_response` 为子，SDK 全自动 | `tracer.py` |
+| `tool_name` / `tool_success` | `tool_name` 按 `tool_call_id` 自动回填；`tool_success` 取 -1/0/1 | `tracer.py` |
+| Step 时间 | 有耗时则 `end_time = start_time + latency_ms`，否则 `end_time = start_time` | `tracer.py` |
+| token 增量 | Step 级 `prompt_tokens_delta` / `completion_tokens_delta`（调 LLM 时才有） | `schemas.Step` |
 | 耗时字段 | Step 只有 `latency_ms`；Trace 有 `duration_ms` | `schemas.py` |
 | 依赖策略 | 核心仅 `pydantic`；`xlsx` / `http` / `deerflow` 为 optional extras | `pyproject.toml` |
 | 发布渠道 | git tag，不依赖私有 PyPI | `tools/release.py` |
@@ -299,9 +319,10 @@ step 列表（兼容 `conversations` / `conversation` / `messages`），按 `tur
       需要决定：子 agent 的 trace 继承所属用户轮次的 `turn_no`，还是引入 trace 间的
       父子关系字段。
 - [ ] **子 agent 内的步骤归属无法表达**：若多个子 agent 共用同一 `run_id` 且消息
-      交错，`step_no` 只能给顺序、给不出分组。当前不引入 span 字段，故暂借
+      交错，`step_no` 只能给顺序、给不出分组。当前 span 规则 B 只能表达
+      「工具调用 → 返回」，表达不了「哪些 step 属于同一个子 agent」，暂借
       `meta`（如 `meta={"agent": "researcher"}`）由业务方自标；若将来需要自动还原，
-      再评估是否加最小层级字段。
+      再评估是否引入「tool_call 派生子 agent」的信号（原路线 C）。
 
 ### 5.3 加工层（合规与容量）
 

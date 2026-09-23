@@ -25,6 +25,7 @@ import functools
 import inspect
 import logging
 import threading
+from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Union
 
 from . import context as ctx
@@ -42,6 +43,32 @@ from .schemas import (
 )
 
 logger = logging.getLogger("agent_trace")
+
+
+def _pop_start(kwargs: Dict[str, Any]) -> Optional[str]:
+    """取出该 step 的开始时刻；兼容旧参数名 timestamp。"""
+    return kwargs.pop("start_time", kwargs.pop("timestamp", None))
+
+
+def _parse_iso(value: Any) -> Optional[datetime]:
+    """把 ISO 8601 字符串解析成带时区的 datetime；失败返回 None。"""
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        moment = value
+    elif isinstance(value, str):
+        text = value.strip()
+        if text.endswith("Z"):
+            text = text[:-1] + "+00:00"
+        try:
+            moment = datetime.fromisoformat(text)
+        except ValueError:
+            return None
+    else:
+        return None
+    if moment.tzinfo is None:
+        moment = moment.replace(tzinfo=timezone.utc)
+    return moment.astimezone(timezone.utc)
 
 
 def _as_tool_calls(spec: Any) -> List[ToolCall]:
@@ -140,15 +167,38 @@ class Turn:
         self._seq[message_type] = seq
         return generate_message_id(message_type, seq)
 
+    def _resolve_tool_info(self, tool_call_id: Optional[str]) -> tuple:
+        """按 tool_call_id 找到所属的 tool_call step，返回 (其 span_id, 工具名)。
+
+        用于自动回填 tool_response 的 parent_span_id / tool_name（span 规则 B：
+        tool_call 是父，指向它的 tool_response 是子）。
+        """
+        if not tool_call_id:
+            return None, None
+        for step in reversed(self._steps):
+            if step.message_type is not MessageType.TOOL_CALL:
+                continue
+            for call in step.tool_calls or []:
+                if call.id == tool_call_id:
+                    name = (call.function or {}).get("name")
+                    return step.span_id, name
+        return None, None
+
     def _append(
         self,
         message_type: MessageType,
         content: Optional[str],
-        timestamp: Optional[str],
+        start_time: Optional[str] = None,
         message_id: Optional[str] = None,
         latency_ms: Optional[int] = None,
         tool_calls: Optional[List[ToolCall]] = None,
         tool_call_id: Optional[str] = None,
+        tool_name: Optional[str] = None,
+        tool_success: Optional[int] = None,
+        prompt_tokens_delta: Optional[int] = None,
+        completion_tokens_delta: Optional[int] = None,
+        span_id: Optional[str] = None,
+        parent_span_id: Optional[str] = None,
         completed: Optional[bool] = None,
         partial: Optional[bool] = None,
         error: Optional[str] = None,
@@ -159,16 +209,47 @@ class Turn:
             raise RuntimeError("该 turn 已提交，不能再追加 step")
         role = MESSAGE_TYPE_META[message_type][1]
         resolved_id = message_id or self._next_message_id(message_type)
+
+        # 时刻：start_time 取传入值或当前时间；end_time 有耗时则相加，否则等于 start_time
+        start_dt = _parse_iso(start_time) or utc_now()
+        if latency_ms:
+            end_dt = start_dt + timedelta(milliseconds=latency_ms)
+        else:
+            end_dt = start_dt
+
+        # span 树（规则 B）：tool_response 自动挂到对应 tool_call 下并回填工具名
+        if message_type is MessageType.TOOL_RESPONSE:
+            resolved_parent, resolved_name = self._resolve_tool_info(tool_call_id)
+            if parent_span_id is None:
+                parent_span_id = resolved_parent
+            if tool_name is None:
+                tool_name = resolved_name
+            if tool_success is None:
+                # 拿不到明确状态时记为「未知」；有 completed 信号时据此判断
+                if completed is False:
+                    tool_success = 0
+                elif completed is True:
+                    tool_success = 1
+                else:
+                    tool_success = -1
+
         step = Step(
             message_id=resolved_id,
+            step_no=len(self._steps) + 1,
             role=role,
             message_type=message_type,
             content=content,
-            timestamp=timestamp or iso_timestamp(),
-            step_no=len(self._steps) + 1,
+            start_time=iso_timestamp(start_dt),
+            end_time=iso_timestamp(end_dt),
             latency_ms=latency_ms,
+            span_id=span_id or generate_id("span"),
+            parent_span_id=parent_span_id,
             tool_calls=tool_calls,
             tool_call_id=tool_call_id,
+            tool_name=tool_name,
+            tool_success=tool_success,
+            prompt_tokens_delta=prompt_tokens_delta,
+            completion_tokens_delta=completion_tokens_delta,
             completed=completed,
             partial=partial,
             error=error,
@@ -185,13 +266,19 @@ class Turn:
         """记录用户输入。同一 turn 内的第 2 条起属于追问/补充，可传 follow_up=True 标记。"""
         if follow_up and "is_follow_up" not in kwargs:
             kwargs["is_follow_up"] = True
-        return self._append(MessageType.USER_QUERY, content, kwargs.pop("timestamp", None), **kwargs)
+        return self._append(
+            MessageType.USER_QUERY, content, _pop_start(kwargs), **kwargs
+        )
 
     def record_reasoning(self, content: str, **kwargs: Any) -> Step:
-        return self._append(MessageType.REASONING, content, kwargs.pop("timestamp", None), **kwargs)
+        return self._append(
+            MessageType.REASONING, content, _pop_start(kwargs), **kwargs
+        )
 
     def record_system_prompt(self, content: str, **kwargs: Any) -> Step:
-        return self._append(MessageType.SYSTEM_PROMPT, content, kwargs.pop("timestamp", None), **kwargs)
+        return self._append(
+            MessageType.SYSTEM_PROMPT, content, _pop_start(kwargs), **kwargs
+        )
 
     def record_tool_call(self, tool_calls: Any = None, **kwargs: Any) -> Step:
         """记录一批工具调用。
@@ -210,7 +297,7 @@ class Turn:
         return self._append(
             MessageType.TOOL_CALL,
             None,
-            kwargs.pop("timestamp", None),
+            _pop_start(kwargs),
             tool_calls=calls,
             **kwargs,
         )
@@ -221,13 +308,15 @@ class Turn:
         return self._append(
             MessageType.TOOL_RESPONSE,
             content,
-            kwargs.pop("timestamp", None),
+            _pop_start(kwargs),
             tool_call_id=tool_call_id,
             **kwargs,
         )
 
     def record_final_answer(self, content: str, **kwargs: Any) -> Step:
-        return self._append(MessageType.FINAL_ANSWER, content, kwargs.pop("timestamp", None), **kwargs)
+        return self._append(
+            MessageType.FINAL_ANSWER, content, _pop_start(kwargs), **kwargs
+        )
 
     # ---------- 步骤上下文管理器：自动计时 ----------
 
@@ -241,7 +330,7 @@ class Turn:
         return self._append(
             MessageType.FINAL_ANSWER,
             content,
-            kwargs.pop("timestamp", None),
+            kwargs.pop("start_time", kwargs.pop("timestamp", None)),
             completed=False,
             error=error,
             **kwargs,
@@ -342,6 +431,9 @@ class _StepContext:
         self._start = utc_now()
         return self
 
+    def _start_iso(self) -> str:
+        return iso_timestamp(self._start)
+
     def set_content(self, content: Any) -> None:
         """记录这一步的产出。
 
@@ -369,11 +461,12 @@ class _StepContext:
             if not calls:
                 raise ValueError("tool_call 步骤需要至少一个工具调用")
             self.step = self.turn._append(
-                self.message_type, None, None, latency_ms=latency_ms, tool_calls=calls, **kwargs
+                self.message_type, None, self._start_iso(), latency_ms=latency_ms,
+                tool_calls=calls, **kwargs,
             )
         else:
             self.step = self.turn._append(
-                self.message_type, content, None, latency_ms=latency_ms, **kwargs
+                self.message_type, content, self._start_iso(), latency_ms=latency_ms, **kwargs
             )
         return False
 

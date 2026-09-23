@@ -90,14 +90,27 @@ class Step(BaseModel):
     model_config = ConfigDict(extra="allow")
 
     message_id: str = Field(..., description="格式 msg_{类型缩写}_{序号}")
+    step_no: Optional[int] = Field(default=None, ge=1, description="从 1 递增；由 SDK 统一分配")
     role: Role
     message_type: MessageType
     content: Optional[str] = Field(default=None, description="tool_call 时为 null")
-    timestamp: str = Field(..., description="ISO 8601 时间戳")
 
-    # 本项目增量字段
-    step_no: Optional[int] = Field(default=None, ge=1, description="从 1 递增；由 SDK 统一分配")
+    # 该步的开始 / 结束时刻（ISO 8601 UTC）。无耗时概念的直接埋点，
+    # end_time 等于 start_time（瞬时事件）。
+    start_time: str = Field(
+        default_factory=iso_timestamp, description="开始的 ISO 8601 时间戳（UTC）"
+    )
+    end_time: Optional[str] = Field(
+        default=None, description="结束的 ISO 8601 时间戳（UTC）；缺省时等于 start_time"
+    )
     latency_ms: Optional[int] = Field(default=None, ge=0)
+
+    # span 树：每个 step 一个 span_id；父 span 由 SDK 按关联关系自动填。
+    # 规则（B）：tool_call 是父，指向它的 tool_response 是子。
+    span_id: str = Field(
+        default_factory=lambda: generate_id("span"), description="跨度 ID，SDK 自动生成"
+    )
+    parent_span_id: Optional[str] = Field(default=None, description="父跨度 ID")
 
     # 同一 turn_id 下的多条 user_query：第一条是初始输入，其余标记为追问
     is_follow_up: Optional[bool] = Field(
@@ -107,6 +120,14 @@ class Step(BaseModel):
     # 工具相关
     tool_calls: Optional[List[ToolCall]] = None
     tool_call_id: Optional[str] = None
+    tool_name: Optional[str] = Field(default=None, description="工具名称，由 SDK 自动回填")
+    tool_success: Optional[int] = Field(
+        default=None, description="工具调用结果：-1 未知 / 0 失败 / 1 成功"
+    )
+
+    # token 增量（调 LLM 的步骤才有）
+    prompt_tokens_delta: Optional[int] = Field(default=None, ge=0)
+    completion_tokens_delta: Optional[int] = Field(default=None, ge=0)
 
     # 结束状态（取代早期的单一 status）
     completed: Optional[bool] = Field(
@@ -130,6 +151,9 @@ class Step(BaseModel):
 
     @model_validator(mode="after")
     def _validate_contract(self) -> "Step":
+        # 没有结束时刻的瞬时事件（直接 record_* 埋点），end_time 等于 start_time
+        if self.end_time is None:
+            self.end_time = self.start_time
         expected_role = MESSAGE_TYPE_META[self.message_type][1]
         if self.role != expected_role:
             raise ValueError(
@@ -141,6 +165,8 @@ class Step(BaseModel):
                 raise ValueError("message_type=tool_call 时 tool_calls 必填且非空")
         if self.message_type is MessageType.TOOL_RESPONSE and not self.tool_call_id:
             raise ValueError("message_type=tool_response 时 tool_call_id 必填")
+        if self.tool_success is not None and self.tool_success not in (-1, 0, 1):
+            raise ValueError("tool_success 取值必须是 -1（未知）/ 0（失败）/ 1（成功）")
         if self.is_follow_up and self.message_type is not MessageType.USER_QUERY:
             raise ValueError("is_follow_up 只能出现在 message_type=user_query 的 step 上")
         return self
@@ -262,6 +288,12 @@ class Trace(BaseModel):
         for index, raw in enumerate(raw_steps, start=1):
             step = dict(raw)
             step.setdefault("step_no", index)
+            # 兼容历史数据：只有 timestamp 时映射为 start_time / end_time
+            legacy_ts = step.pop("timestamp", None)
+            if legacy_ts is not None:
+                step.setdefault("start_time", legacy_ts)
+                step.setdefault("end_time", legacy_ts)
+            # span_id 缺省时由模型 default_factory 生成
             steps.append(step)
 
         data["conversations"] = steps

@@ -110,6 +110,19 @@ def _tool_calls_of(message: Any) -> List[Dict[str, Any]]:
     return calls
 
 
+def _token_deltas(message: Any) -> tuple:
+    """从消息的 usage_metadata 取本次 token 增量 (prompt, completion)。
+
+    取不到（模型未上报用量）时返回 (None, None)，字段留空。
+    """
+    usage = getattr(message, "usage_metadata", None)
+    if not isinstance(usage, dict):
+        return None, None
+    prompt = usage.get("input_tokens")
+    completion = usage.get("output_tokens")
+    return prompt, completion
+
+
 def _additional_kwargs(message: Any) -> Dict[str, Any]:
     kwargs = getattr(message, "additional_kwargs", None)
     return kwargs if isinstance(kwargs, dict) else {}
@@ -336,24 +349,39 @@ class AgentTraceMiddleware(_AgentMiddleware):
         if role == "tool":
             tool_call_id = getattr(message, "tool_call_id", None)
             msg_status = getattr(message, "status", None)
-            failed = msg_status == "error"
+            # LangChain 的 ToolMessage.status: "success" / "error"；缺省视为未知
+            if msg_status == "error":
+                tool_success = 0
+            elif msg_status == "success":
+                tool_success = 1
+            else:
+                tool_success = -1
             turn.record_tool_response(
                 tool_call_id=tool_call_id or "",
                 content=text,
-                completed=False if failed else None,
-                error=text if failed else None,
+                # tool_name 由 SDK 按 tool_call_id 自动回填
+                tool_name=getattr(message, "name", None),
+                tool_success=tool_success,
+                completed=False if tool_success == 0 else None,
+                error=text if tool_success == 0 else None,
             )
             return
 
         if role == "ai":
             calls = _tool_calls_of(message)
+            prompt_delta, completion_delta = _token_deltas(message)
             if text:
                 # 判定规则（与 TerminalResponseMiddleware 的语义对齐）：
                 # - 带 tool_calls 的 AI 文本 = 推理/规划 -> reasoning
                 # - 不带 tool_calls 的 AI 文本 = 候选最终回答 -> 先记为 reasoning，
                 #   若它确实是本轮最后一条 AI 文本，after_agent 会把它升级为 final_answer
                 #   （见 _close_turn 的 pending_ai 处理）
-                turn.record_reasoning(text, meta={"pending_final": not calls})
+                turn.record_reasoning(
+                    text,
+                    prompt_tokens_delta=prompt_delta,
+                    completion_tokens_delta=completion_delta,
+                    meta={"pending_final": not calls},
+                )
             if calls:
                 turn.record_tool_call(
                     [

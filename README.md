@@ -43,9 +43,10 @@ v0.2.0 按公司《轨迹数据规范》改造了字段，从 v0.1.0 升级需�
 | `trace["meta"]` | `trace["metadata"]` |
 | `trace["conversation"]` | `trace["conversations"]` |
 | `trace["status"]` | `trace["completed"]` / `trace["partial"]` |
-| `span_id` / `parent_span_id`（Step） | 已移除，层级信息用 Step 级 `meta` |
-| `input_tokens` / `output_tokens` / `model` / `tags` | 已移除 |
-| `turn.span(...)` | 已移除 |
+| `span_id` / `parent_span_id`（Step） | 恢复，改由 SDK 自动生成 / 自动填 |
+| `input_tokens` / `output_tokens` / `model` / `tags` | 已移除（Step 级改用 `prompt_tokens_delta` / `completion_tokens_delta`） |
+| `turn.span(...)` | 已移除（`span_id` / `parent_span_id` 改由 SDK 自动生成） |
+| `trace["conversation"][i]["timestamp"]` | `start_time` / `end_time` |
 
 **SDK 开发者（源码安装）**：
 
@@ -109,7 +110,9 @@ step 4  tool_response  tool_call_id: "call_0964..."   ← 回关到 step 3 的�
 step 5  tool_response  tool_call_id: "call_19bc..."   ← 回关到 step 3 的第二个调用
 ```
 
-- 不引入 span 层级字段（`span_id` / `parent_span_id` 已移除）。
+- **span 树（规则 B）**：每个 step 自动分配 `span_id`；`tool_call` 是父，
+  指向它的 `tool_response` 是子（`parent_span_id` 由 SDK 按 `tool_call_id`
+  自动回填），业务方无需传。
 - 多 agent 场景下每个 run 各自产出一条 trace，靠 `session_id` 关联。
 - 需要额外归属信息（如"这一步由哪个子 agent 产出"）时，用 `meta` 自由扩展：
   `turn.record_reasoning("...", meta={"agent": "researcher"})`。
@@ -141,9 +144,18 @@ Excel 里一条 tool_call 消息占一行，多个调用放在同一格（JSON �
 
 ## 字段契约
 
-Step 字段：`message_id`（`msg_{缩写}_{序号}`）、`role`、`message_type`、`content`、
-`timestamp`、`step_no`、`latency_ms`、`tool_calls`、`tool_call_id`、`is_follow_up`、
-`completed` / `partial` / `error`、`meta`。
+Step 字段（与公司《轨迹数据规范》对齐）：
+
+- 基础：`message_id`（`msg_{缩写}_{序号}`）、`step_no`、`role`、`message_type`、
+  `content`
+- 时间：`start_time` / `end_time`（ISO 8601 UTC）、`latency_ms`
+- span 树：`span_id`（SDK 自动生成）、`parent_span_id`（SDK 自动填）
+- 工具：`tool_calls`、`tool_call_id`、`tool_name`（SDK 自动回填）、
+  `tool_success`（-1 未知 / 0 失败 / 1 成功）
+- token：`prompt_tokens_delta` / `completion_tokens_delta`（调 LLM 的步骤才有）
+- 状态：`completed` / `partial` / `error`、`is_follow_up`、`meta`
+
+> `step_no` 用 Integer（规范文档写的是 String，按实际实现取 Integer）。
 
 Trace 字段（与公司《轨迹数据规范》对齐）：
 
