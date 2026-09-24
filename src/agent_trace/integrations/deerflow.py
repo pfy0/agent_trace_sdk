@@ -165,24 +165,34 @@ def _injected_label(message: Any) -> Optional[str]:
     return None
 
 
-#: ToolMessage 的显式 status 取值；LangChain 默认值是 "success"，
-#: 因此只有它出现在 model_fields_set 里才代表「框架真的判定了成败」。
+#: ToolMessage 的显式 status 取值。注意 LangChain 的 ``BaseTool.run`` 无论成败
+#: 都会把 ``status`` 显式传给 ToolMessage（成功为 "success"），LangGraph 的
+#: ToolNode 出错时显式传 "error"。因此 "error" 是可靠的失败证据，而 "success"
+#: 只说明「框架没把这次调用判成异常」，不能证明工具真的成功（DeerFlow 的 bash
+#: 失败时也返回 "success"），所以文本证据要优先于它。
 _EXPLICIT_SUCCESS_STATUSES = ("success",)
 _EXPLICIT_ERROR_STATUSES = ("error",)
 
-#: DeerFlow 把失败写进返回文本而非 status。以下特征用于兜底识别
-#: （见 sandbox/local/local_sandbox.py 的 Exit Code / Std Error / 超时提示）。
+#: 工具把失败写进返回文本而非 status 时的识别特征。
+#:
+#: 只保留「权威」信号，避免把合法输出误判成失败：
+#: - `Exit Code: <非0>` / 超时提示：由 DeerFlow 沙箱（local_sandbox.py）在
+#:   returncode != 0 或命令超时时**追加**到输出末尾，命令自身成功时不会出现，
+#:   因此按「整行」匹配；
+#: - 开头的 `Error:`：DeerFlow 各工具出错时以 ``f"Error: {e}"`` 把**整段返回
+#:   文本**变成 ``Error: ...``，所以只在文本最开头匹配（``\A``），不按行匹配
+#:   ——否则正文中间出现的 ``Error:``（如 cat / grep 到的日志）会被误判为失败。
+#:
+#: 刻意不采信的弱信号：`Std Error:`（沙箱只要 stderr 非空就追加，rc==0 时也有，
+#: 会把「成功但打了 warning」误判为失败）、`No such file or directory` /
+#: `Permission denied` / `command not found` / `Traceback`（可能出现在
+#: `cat`、`grep` 等命令的合法输出里）。
 _TOOL_ERROR_PATTERNS = tuple(
-    re.compile(pattern, re.IGNORECASE)
+    re.compile(pattern, re.IGNORECASE | re.MULTILINE)
     for pattern in (
-        r"\bExit Code:\s*[1-9]\d*",          # 非零退出码
-        r"\bStd Error:",                        # stderr 有内容
-        r"\btimed out after\b",                # 命令超时被终止
-        r"^\s*Error:",                          # 工具直接返回 "Error: ..."
-        r"\bTraceback \(most recent call last\)",  # Python 异常栈
-        r"\bcommand not found\b",
-        r"\bNo such file or directory\b",
-        r"\bPermission denied\b",
+        r"\A\s*Error:",                      # 工具以 "Error: ..." 返回整段文本
+        r"^\s*Exit Code:\s*[1-9]\d*\s*$",   # 沙箱追加的非零退出码
+        r"^\s*Command timed out after\b",    # 沙箱追加的超时提示
     )
 )
 
@@ -190,9 +200,13 @@ _TOOL_ERROR_PATTERNS = tuple(
 def _explicit_tool_status(message: Any) -> Optional[str]:
     """取出**显式设置**的 ToolMessage.status。
 
-    LangChain 的 ``ToolMessage.status`` 默认值就是 ``"success"``，即使工具
-    失败了也不会变。只有字段出现在 ``model_fields_set`` 里才说明是调用方
-    真正传的，否则一律视为「未判定」。
+    LangChain 的 ``ToolMessage.status`` 默认值是 ``"success"``。裸构造的
+    ToolMessage 不会带上该字段（见 ``model_fields_set``），此时返回 None，
+    表示「未判定」而不是「成功」。
+
+    注意：LangChain 的 ``BaseTool.run`` 会把 ``status`` 显式传入（成功也是
+    ``"success"``），所以「显式出现」并不等于「框架真的判定了成败」；
+    调用方需要配合 :func:`_looks_like_tool_error` 一起使用。
     """
     status = getattr(message, "status", None)
     if not isinstance(status, str):
@@ -208,6 +222,26 @@ def _looks_like_tool_error(text: str) -> bool:
     if not text:
         return False
     return any(pattern.search(text) for pattern in _TOOL_ERROR_PATTERNS)
+
+
+def _tool_success(message: Any, text: str) -> int:
+    """判定一次工具调用是否成功，返回 -1（未知）/ 0（失败）/ 1（成功）。
+
+    判定顺序（文本证据在前）：
+    1. 返回文本命中错误特征 -> 0。DeerFlow 的 bash 失败时把 ``Exit Code`` /
+       超时提示写进文本，而 ``status`` 仍是框架给的 ``"success"``，所以必须先看文本；
+    2. 调用方显式设置 ``status="error"`` -> 0；
+    3. 调用方显式设置 ``status="success"`` -> 1（此时已排除文本里的失败证据）；
+    4. 都判不出 -> -1。
+    """
+    if _looks_like_tool_error(text):
+        return 0
+    explicit = _explicit_tool_status(message)
+    if explicit in _EXPLICIT_ERROR_STATUSES:
+        return 0
+    if explicit in _EXPLICIT_SUCCESS_STATUSES:
+        return 1
+    return -1
 
 
 def _message_key(message: Any) -> str:
@@ -398,21 +432,10 @@ class AgentTraceMiddleware(_AgentMiddleware):
 
         if role == "tool":
             tool_call_id = getattr(message, "tool_call_id", None)
-            # 判定优先级：
-            # 1) 调用方**显式**设置的 status（LangChain 默认值是 "success"，
-            #    不能直接采信，否则失败会被误判为成功）；
-            # 2) 返回文本里的错误特征（DeerFlow 的 bash 把 Exit Code / Std Error /
-            #    超时提示写进文本，status 仍是 success）；
-            # 3) 都判不出时记 -1（未知）。
-            explicit = _explicit_tool_status(message)
-            if explicit in _EXPLICIT_ERROR_STATUSES:
-                tool_success = 0
-            elif explicit in _EXPLICIT_SUCCESS_STATUSES:
-                tool_success = 1
-            elif _looks_like_tool_error(text):
-                tool_success = 0
-            else:
-                tool_success = -1
+            # 判定逻辑见 _tool_success：文本里的失败证据优先，其次才看显式
+            # status=error / status=success（LangChain 的 BaseTool.run 成功时
+            # 也会显式传 "success"，因此不能先信它）。
+            tool_success = _tool_success(message, text)
             turn.record_tool_response(
                 tool_call_id=tool_call_id or "",
                 content=text,

@@ -1,6 +1,6 @@
 # Agent 运行轨迹采集 SDK — 现状与待办
 
-> 状态：与代码对齐（v0.4.2；v0.4.0 为契约破坏性变更：Step 去字段 + 契约收紧）
+> 状态：与代码对齐（v0.4.3；v0.4.0 为契约破坏性变更：Step 去字段 + 契约收紧）
 > 范围：Python 优先（`requires-python >= 3.9`）
 > 最后更新：2026-09-23
 >
@@ -228,13 +228,22 @@ step 5  tool_response   span=span_C   parent=span_A
   带 `tool_calls` 的 `AIMessage.content` → `reasoning`；
   末条不带 `tool_calls` 的 AI 文本升级为 `final_answer`；
   `AIMessage.tool_calls` 合并为 1 个 `tool_call` step；`ToolMessage` → `tool_response`。
-- `tool_success` 判定（`ToolMessage.status` 默认值是 `"success"`，不可直接采信）：
-  1. 调用方**显式**设置 status 时按其取值（`model_fields_set` 判定是否显式）；
-  2. 否则按返回文本的错误特征兜底识别 —— `Exit Code: <非0>`、`Std Error:`、
-     `timed out after`、`Error:` 前缀、Python traceback、`command not found`、
-     `No such file or directory`、`Permission denied`（DeerFlow 的 bash 把失败
-     写进文本，status 仍是 success）；
-  3. 都判不出记 `-1`（未知）。
+- `tool_success` 判定。**文本里的失败证据优先于 `status`**：LangChain 的
+  `BaseTool.run` 无论成败都会把 `status` 显式传给 `ToolMessage`（成功也是
+  `"success"`，DeerFlow 的 bash 失败时同样如此），所以「显式设置」并不能证明
+  工具有效成功，必须先看返回文本。判定顺序：
+  1. 返回文本命中错误特征 → `0` 失败。只采信权威信号 —— 整行的
+     `Exit Code: <非0>`、整行的 `Command timed out after ...`（由 DeerFlow 沙箱在
+     `returncode != 0` / 超时时追加到输出末尾），以及开头（`\A`）的 `Error: ...`
+     （DeerFlow 各工具出错时以 `f"Error: {e}"` 返回整段文本）；
+  2. 否则调用方显式 `status="error"`（LangGraph ToolNode 的失败路径）→ `0`；
+  3. 否则显式 `status="success"` → `1`（此时文本里的失败证据已排除）；
+  4. 都判不出记 `-1`（未知）。
+
+  > 刻意**不**作为失败信号的弱特征：`Std Error:`（沙箱只要 stderr 非空就追加，
+  > `rc==0` 时也有，会把「成功但打了 warning」误判为失败）、
+  > `No such file or directory` / `Permission denied` / `command not found` /
+  > `Traceback`（可能出现在 `cat`、`grep` 等命令的合法输出里）。
 - 框架注入的 `HumanMessage`（`hide_from_ui`，如 memory 画像、动态上下文）记为
   `reasoning`，来源标签记在 Trace 级 `metadata.deerflow_injected`，不算 `user_query`。
 - 澄清续跑（`ask_clarification` 中断后另起 `run_id`）**并入同一轮 trace**，
@@ -262,7 +271,7 @@ step 列表（兼容 `conversations` / `conversation` / `messages`），按 `tur
 ### 2.11 发布
 
 走 **git tag** 分发（不依赖私有 PyPI），业务方
-`pip install "git+https://github.com/pfy0/agent_trace_sdk.git@v0.4.2"`。
+`pip install "git+https://github.com/pfy0/agent_trace_sdk.git@v0.4.3"`。
 详见 `docs/distribute.md`。
 
 ---

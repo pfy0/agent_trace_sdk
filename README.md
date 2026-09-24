@@ -20,7 +20,7 @@ Agent 运行轨迹采集 SDK。业务方以**最小改动**接入后，SDK 自�
 **业务方（从 GitHub 私有仓库安装）**：
 
 ```bash
-pip install "git+https://github.com/pfy0/agent_trace_sdk.git@v0.4.2"
+pip install "git+https://github.com/pfy0/agent_trace_sdk.git@v0.4.3"
 ```
 
 - 需要：机器能访问 GitHub、装了 `git`、对仓库有读权限。
@@ -49,6 +49,24 @@ DeerFlow/uv 安装）见 `docs/distribute.md`。
 - **修正 `tool_success` 误判**：`ToolMessage.status` 的默认值是 `"success"`，
   旧版直接采信，导致 DeerFlow 里失败的工具调用被记成成功。现在按「显式 status
   → 返回文本错误特征 → 未知」三层判定，失败会正确记为 `0`。
+
+### v0.4.3 变更提示（修正 tool_success 判定顺序）
+
+**行为变化**：
+
+- **`tool_success` 判定顺序改为「文本证据优先」**。v0.4.1 的「先看显式 status」
+  前提不成立：LangChain 的 `BaseTool.run` 无论成败都会把 `status` **显式**传给
+  `ToolMessage`（成功也是 `"success"`），所以那一层永远命中 `"success"`，DeerFlow
+  里失败的工具调用仍被记成成功。现在按「文本错误特征 → 显式 `error` → 显式
+  `success` → 未知」判定。
+- **收紧错误特征**：只采信权威信号 —— 整行的 `Exit Code: <非0>`、整行的
+  `Command timed out after ...`、开头的 `Error: ...`。不再把 `Std Error:`
+  当作失败（沙箱只要 stderr 非空就追加，命令成功时也有，会把「打 warning 的成功
+  命令」误判为失败），也去掉 `No such file or directory` / `Permission denied` /
+  `command not found` / `Traceback` 等可能出现在合法输出里的弱特征。
+
+仅影响 DeerFlow 集成（`integrations/deerflow.py`）内的判定，Step 契约未变。
+详见下方「DeerFlow 集成」的 `tool_success` 判定。
 
 ### v0.4.0 升级提示（不向后兼容，Step 去字段 + 契约收紧）
 
@@ -258,12 +276,13 @@ plugins:
   动态上下文提醒、待办提醒等）记为 `reasoning`，来源标签记在 Trace 级
   `metadata.deerflow_injected`（值为 `injected` / `dynamic_context`）。判定规则与 DeerFlow 自身的
   `_is_genuine_user_message` 一致：澄清答复虽带 `hide_from_ui`，但仍属真实用户输入。
-- **`tool_success` 判定**：`ToolMessage.status` 的默认值是 `"success"`，直接采信会把
-  失败误判为成功。因此按三层判定：① 调用方显式设置的 status（用 `model_fields_set`
-  区分默认值）；② 返回文本的错误特征（`Exit Code: <非0>` / `Std Error:` /
-  `timed out after` / `Error:` 前缀 / Python traceback / `command not found` /
-  `No such file or directory` / `Permission denied`）——DeerFlow 的 bash 把失败写进
-  文本、status 仍是 success；③ 判不出记 `-1` 未知。
+- **`tool_success` 判定**：**返回文本里的失败证据优先于 `status`**。LangChain 的
+  `BaseTool.run` 无论成败都会把 `status` 显式传给 `ToolMessage`（成功也是
+  `"success"`，DeerFlow 的 bash 失败时同样如此），所以先信 status 会把失败误判为
+  成功。判定顺序：① 文本命中权威错误特征 → `0`（整行 `Exit Code: <非0>`、整行
+  `Command timed out after ...`、开头 `Error: ...`）；② 否则显式 `status="error"`
+  → `0`；③ 否则显式 `status="success"` → `1`；④ 判不出记 `-1` 未知。`Std Error:`
+  等弱特征不再作为失败信号（stderr 非空但 `rc==0` 是成功）。
 - 初始 state 里携带的历史消息不会重复采集（以最后一条真实用户消息为界）。
 - 无 langchain 的环境下本模块仍可 import（中间件退化为普通类，便于纯逻辑单测）。
 
