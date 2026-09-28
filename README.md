@@ -20,17 +20,31 @@ Agent 运行轨迹采集 SDK。业务方以**最小改动**接入后，SDK 自�
 **业务方（从 GitHub 私有仓库安装）**：
 
 ```bash
-pip install "git+https://github.com/pfy0/agent_trace_sdk.git@v0.4.3"
+pip install "git+https://github.com/pfy0/agent_trace_sdk.git@v0.4.4"
 ```
 
 - 需要：机器能访问 GitHub、装了 `git`、对仓库有读权限。
 - 私有仓库还需带上凭证（SSH key 或 Token）：
-  `pip install "git+ssh://git@github.com/pfy0/agent_trace_sdk.git@v0.4.3"`
+  `pip install "git+ssh://git@github.com/pfy0/agent_trace_sdk.git@v0.4.4"`
 - 装可选依赖（Excel 导出等）：
-  `pip install "agent-trace-sdk[all] @ git+https://github.com/pfy0/agent_trace_sdk.git@v0.4.3"`
+  `pip install "agent-trace-sdk[all] @ git+https://github.com/pfy0/agent_trace_sdk.git@v0.4.4"`
 
 固定 tag 安装，版本可复现。完整说明（Token 配置、升级、离线 wheel、
 DeerFlow/uv 安装）见 `docs/distribute.md`。
+
+### v0.4.4 变更提示（脱敏默认层增强 + 移除离线导入）
+
+**行为变化**：
+
+- **脱敏扩为三层防线**：`tool_calls[].function.arguments` 里键名命中
+  `password` / `token` / `api_key` / `authorization` 等时，其值**整段**擦除
+  （值是 dict/list 时连子结构一起擦）。此前只按值的文本形态匹配，
+  `{"password": "hunter2"}` 这类结构化凭据会明文漏过。
+  另新增高熵串检测（`EntropyRule`），抓没有已知前缀的随机密钥。
+  新增 `Redactor(redact_keys=...)` / `sensitive_keys=[...]` 配置项。
+- **移除离线导入功能**：`Trace.from_raw()`、`split_by_turn()`、`ingest.py`
+  及示例 `examples/import_data.py` 一并删除。SDK 定位是采集 agent 运行轨迹，
+  不再提供导入已有数据的入口。
 
 ### v0.4.2 变更提示（conversations_type 默认值变更）
 
