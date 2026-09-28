@@ -21,7 +21,7 @@
 """
 from __future__ import annotations
 
-import re
+import json
 from typing import Any, Dict, List, Optional
 
 from ..schemas import MessageType
@@ -165,82 +165,71 @@ def _injected_label(message: Any) -> Optional[str]:
     return None
 
 
-#: ToolMessage 的显式 status 取值。注意 LangChain 的 ``BaseTool.run`` 无论成败
-#: 都会把 ``status`` 显式传给 ToolMessage（成功为 "success"），LangGraph 的
-#: ToolNode 出错时显式传 "error"。因此 "error" 是可靠的失败证据，而 "success"
-#: 只说明「框架没把这次调用判成异常」，不能证明工具真的成功（DeerFlow 的 bash
-#: 失败时也返回 "success"），所以文本证据要优先于它。
-_EXPLICIT_SUCCESS_STATUSES = ("success",)
-_EXPLICIT_ERROR_STATUSES = ("error",)
-
-#: 工具把失败写进返回文本而非 status 时的识别特征。
+#: 工具返回体里表示成败的顶层布尔键。业务工具常直接返回
+#: ``{"success": true/false}`` / ``{"ok": true/false}`` 这类结构化结果，
+#: 这是**唯一**的判定依据：框架的 ``ToolMessage.status`` 无论成败都被 LangChain
+#: 显式置为 ``"success"``（DeerFlow 的 bash 失败时也是），文本特征又容易误伤
+#: 合法输出，都不再采信（2026-08 起收敛为只看 JSON）。
 #:
-#: 只保留「权威」信号，避免把合法输出误判成失败：
-#: - `Exit Code: <非0>` / 超时提示：由 DeerFlow 沙箱（local_sandbox.py）在
-#:   returncode != 0 或命令超时时**追加**到输出末尾，命令自身成功时不会出现，
-#:   因此按「整行」匹配；
-#: - 开头的 `Error:`：DeerFlow 各工具出错时以 ``f"Error: {e}"`` 把**整段返回
-#:   文本**变成 ``Error: ...``，所以只在文本最开头匹配（``\A``），不按行匹配
-#:   ——否则正文中间出现的 ``Error:``（如 cat / grep 到的日志）会被误判为失败。
-#:
-#: 刻意不采信的弱信号：`Std Error:`（沙箱只要 stderr 非空就追加，rc==0 时也有，
-#: 会把「成功但打了 warning」误判为失败）、`No such file or directory` /
-#: `Permission denied` / `command not found` / `Traceback`（可能出现在
-#: `cat`、`grep` 等命令的合法输出里）。
-_TOOL_ERROR_PATTERNS = tuple(
-    re.compile(pattern, re.IGNORECASE | re.MULTILINE)
-    for pattern in (
-        r"\A\s*Error:",                      # 工具以 "Error: ..." 返回整段文本
-        r"^\s*Exit Code:\s*[1-9]\d*\s*$",   # 沙箱追加的非零退出码
-        r"^\s*Command timed out after\b",    # 沙箱追加的超时提示
-    )
-)
+#: **只看顶层键**：嵌套在 ``data`` 里的 ``ok`` 说的是业务子状态（如
+#: ``status: draft``），不能代表这次工具调用本身的成败。
+_JSON_VERDICT_KEYS = ("success", "ok", "is_success", "succeeded")
+
+_TRUE_STRINGS = frozenset({"true", "1", "yes"})
+_FALSE_STRINGS = frozenset({"false", "0", "no"})
 
 
-def _explicit_tool_status(message: Any) -> Optional[str]:
-    """取出**显式设置**的 ToolMessage.status。
+def _json_verdict(text: str) -> Optional[int]:
+    """从工具返回的 JSON body 顶层取成败布尔值，返回 1 / 0 / None。
 
-    LangChain 的 ``ToolMessage.status`` 默认值是 ``"success"``。裸构造的
-    ToolMessage 不会带上该字段（见 ``model_fields_set``），此时返回 None，
-    表示「未判定」而不是「成功」。
-
-    注意：LangChain 的 ``BaseTool.run`` 会把 ``status`` 显式传入（成功也是
-    ``"success"``），所以「显式出现」并不等于「框架真的判定了成败」；
-    调用方需要配合 :func:`_looks_like_tool_error` 一起使用。
+    只认真正的布尔值（或 ``"true"`` / ``"false"`` 这类字符串写法）；
+    取不到、文本不是 JSON 对象、或顶层没有这些键时返回 None。
     """
-    status = getattr(message, "status", None)
-    if not isinstance(status, str):
-        return None
-    fields_set = getattr(message, "model_fields_set", None)
-    if isinstance(fields_set, (set, frozenset)) and "status" not in fields_set:
-        return None
-    return status
-
-
-def _looks_like_tool_error(text: str) -> bool:
-    """按常见错误特征判断工具返回文本是否代表失败。"""
     if not text:
-        return False
-    return any(pattern.search(text) for pattern in _TOOL_ERROR_PATTERNS)
+        return None
+    stripped = text.strip()
+    if not stripped.startswith("{"):
+        return None
+    payload = None
+    try:
+        payload = json.loads(stripped)
+    except (TypeError, ValueError):
+        # 沙箱可能在 JSON 之后追加诊断文本，退一步只取首个 JSON 对象
+        end = stripped.rfind("}")
+        if end > 0:
+            try:
+                payload = json.loads(stripped[: end + 1])
+            except (TypeError, ValueError):
+                payload = None
+    if not isinstance(payload, dict):
+        return None
+    for key in _JSON_VERDICT_KEYS:
+        if key not in payload:
+            continue
+        value = payload[key]
+        if isinstance(value, bool):
+            return 1 if value else 0
+        if isinstance(value, str):
+            lowered = value.strip().lower()
+            if lowered in _TRUE_STRINGS:
+                return 1
+            if lowered in _FALSE_STRINGS:
+                return 0
+    return None
 
 
 def _tool_success(message: Any, text: str) -> int:
     """判定一次工具调用是否成功，返回 -1（未知）/ 0（失败）/ 1（成功）。
 
-    判定顺序（文本证据在前）：
-    1. 返回文本命中错误特征 -> 0。DeerFlow 的 bash 失败时把 ``Exit Code`` /
-       超时提示写进文本，而 ``status`` 仍是框架给的 ``"success"``，所以必须先看文本；
-    2. 调用方显式设置 ``status="error"`` -> 0；
-    3. 调用方显式设置 ``status="success"`` -> 1（此时已排除文本里的失败证据）；
-    4. 都判不出 -> -1。
+    只按工具返回体的 JSON 判定：顶层 ``success`` / ``ok`` 等布尔值为真 -> 1，
+    为假 -> 0。没有工具调用、返回体不是 JSON、或顶层没有成败标记时一律 -1
+    （未知）——**不猜**，也不采信框架的 ``status`` 或文本特征。
+
+    ``message`` 形参保留是为了兼容既有调用与后续可能的判定依据。
     """
-    if _looks_like_tool_error(text):
-        return 0
-    explicit = _explicit_tool_status(message)
-    if explicit in _EXPLICIT_ERROR_STATUSES:
-        return 0
-    if explicit in _EXPLICIT_SUCCESS_STATUSES:
-        return 1
+    verdict = _json_verdict(text)
+    if verdict is not None:
+        return verdict
     return -1
 
 
@@ -432,9 +421,8 @@ class AgentTraceMiddleware(_AgentMiddleware):
 
         if role == "tool":
             tool_call_id = getattr(message, "tool_call_id", None)
-            # 判定逻辑见 _tool_success：文本里的失败证据优先，其次才看显式
-            # status=error / status=success（LangChain 的 BaseTool.run 成功时
-            # 也会显式传 "success"，因此不能先信它）。
+            # 判定逻辑见 _tool_success：只看返回体 JSON 顶层的 success / ok 等
+            # 布尔值；框架 status 与文本特征都不采信，判不出记 -1。
             tool_success = _tool_success(message, text)
             turn.record_tool_response(
                 tool_call_id=tool_call_id or "",

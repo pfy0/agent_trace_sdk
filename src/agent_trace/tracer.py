@@ -136,6 +136,79 @@ def _as_tool_calls(spec: Any) -> List[ToolCall]:
     return calls
 
 
+def _aggregate_stats(steps: List[Step]) -> Dict[str, Any]:
+    """按 conversations 聚合 Trace 级统计字段（SDK 自动填）。
+
+    - toolsets_used：本轮出现过的工具名（去重，按首次出现排序）；来源是
+      tool_call 的 ``function.name`` 与 tool_response 的 ``tool_name``。
+    - tool_stats：按工具名统计 ``total`` / ``success`` / ``failure`` /
+      ``unknown``；``success`` 取 ``tool_success == 1``，``failure`` 取 0，
+      其余（含 ``-1`` 未知）计入 ``unknown``，保证 total == 三项之和。
+    - tool_error_counts：只保留有失败的工具，值为失败次数。
+    - token_usage：累加各 step 的 token 增量；完全没有 token 数据时不产出。
+
+    业务方可通过 ``Turn(..., token_usage=...)`` 等 Trace 字段覆盖自动值。
+    """
+    toolsets: List[str] = []
+    seen = set()
+
+    def _remember(name: Any) -> None:
+        if name and name not in seen:
+            seen.add(name)
+            toolsets.append(name)
+
+    for step in steps:
+        if step.message_type is MessageType.TOOL_CALL:
+            for call in step.tool_calls or []:
+                _remember((call.function or {}).get("name"))
+        elif step.message_type is MessageType.TOOL_RESPONSE:
+            _remember(step.tool_name)
+
+    tool_stats: Dict[str, Dict[str, int]] = {}
+    for step in steps:
+        if step.message_type is not MessageType.TOOL_RESPONSE or not step.tool_name:
+            continue
+        entry = tool_stats.setdefault(
+            step.tool_name, {"total": 0, "success": 0, "failure": 0, "unknown": 0}
+        )
+        entry["total"] += 1
+        if step.tool_success == 1:
+            entry["success"] += 1
+        elif step.tool_success == 0:
+            entry["failure"] += 1
+        else:
+            entry["unknown"] += 1
+
+    tool_error_counts = {
+        name: entry["failure"] for name, entry in tool_stats.items() if entry["failure"]
+    }
+
+    prompt_tokens = 0
+    completion_tokens = 0
+    has_tokens = False
+    for step in steps:
+        if step.prompt_tokens_delta is not None:
+            prompt_tokens += step.prompt_tokens_delta
+            has_tokens = True
+        if step.completion_tokens_delta is not None:
+            completion_tokens += step.completion_tokens_delta
+            has_tokens = True
+    token_usage = None
+    if has_tokens:
+        token_usage = {
+            "prompt_tokens": prompt_tokens,
+            "completion_tokens": completion_tokens,
+            "total_tokens": prompt_tokens + completion_tokens,
+        }
+
+    return {
+        "toolsets_used": toolsets or None,
+        "tool_stats": tool_stats or None,
+        "tool_error_counts": tool_error_counts or None,
+        "token_usage": token_usage,
+    }
+
+
 class Turn:
     """一轮交互的采集句柄。由 `Tracer.turn(...)` 创建，不直接实例化。"""
 
@@ -380,6 +453,7 @@ class Turn:
             "metadata": self.metadata or None,
             "conversations": [step.model_dump(mode="python") for step in self._steps],
         }
+        payload.update(_aggregate_stats(self._steps))
         payload.update(self.extra)
         return Trace.model_validate(payload)
 

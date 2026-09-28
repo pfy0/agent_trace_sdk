@@ -1,8 +1,8 @@
 # Agent 运行轨迹采集 SDK — 现状与待办
 
-> 状态：与代码对齐（v0.4.3；v0.4.0 为契约破坏性变更：Step 去字段 + 契约收紧）
+> 状态：与代码对齐（v0.5.0；v0.4.0 为契约破坏性变更：Step 去字段 + 契约收紧）
 > 范围：Python 优先（`requires-python >= 3.9`）
-> 最后更新：2026-09-23
+> 最后更新：2026-09-28
 >
 > 本文取代此前的《实施计划 v0.3》草案。草案里 `trace_id`、`data/`、`output/`、
 > `extract_steps.py`、`sanitize.py`、`exporters/otlp.py`、`integrations/openai.py`、
@@ -44,7 +44,7 @@ src/agent_trace/
 │   ├── spool.py      # SpoolStore：失败批次落盘
 │   └── exporter.py   # HttpExporter：把 trace 非阻塞送入队列
 └── exporters/        # json / jsonl / xlsx / base(memory)
-examples/             # 5 个可运行示例
+examples/             # 3 个可运行示例
 tools/release.py      # 一键构建 / 打版本 tag
 tools/export_schema.py# 导出语言无关 JSON Schema
 schema/               # trace.schema.json、enums.json（由 tools/export_schema.py 生成）
@@ -222,22 +222,17 @@ step 5  tool_response   span=span_C   parent=span_A
   带 `tool_calls` 的 `AIMessage.content` → `reasoning`；
   末条不带 `tool_calls` 的 AI 文本升级为 `final_answer`；
   `AIMessage.tool_calls` 合并为 1 个 `tool_call` step；`ToolMessage` → `tool_response`。
-- `tool_success` 判定。**文本里的失败证据优先于 `status`**：LangChain 的
-  `BaseTool.run` 无论成败都会把 `status` 显式传给 `ToolMessage`（成功也是
-  `"success"`，DeerFlow 的 bash 失败时同样如此），所以「显式设置」并不能证明
-  工具有效成功，必须先看返回文本。判定顺序：
-  1. 返回文本命中错误特征 → `0` 失败。只采信权威信号 —— 整行的
-     `Exit Code: <非0>`、整行的 `Command timed out after ...`（由 DeerFlow 沙箱在
-     `returncode != 0` / 超时时追加到输出末尾），以及开头（`\A`）的 `Error: ...`
-     （DeerFlow 各工具出错时以 `f"Error: {e}"` 返回整段文本）；
-  2. 否则调用方显式 `status="error"`（LangGraph ToolNode 的失败路径）→ `0`；
-  3. 否则显式 `status="success"` → `1`（此时文本里的失败证据已排除）；
-  4. 都判不出记 `-1`（未知）。
+- `tool_success` 判定。**只看工具返回体 JSON 顶层的成败布尔值**：取 `success` /
+  `ok` / `is_success` / `succeeded`，为真 → `1`，为假 → `0`；没有工具调用、
+  返回体不是 JSON、或顶层没有这些键 → `-1`（未知）。
 
-  > 刻意**不**作为失败信号的弱特征：`Std Error:`（沙箱只要 stderr 非空就追加，
-  > `rc==0` 时也有，会把「成功但打了 warning」误判为失败）、
-  > `No such file or directory` / `Permission denied` / `command not found` /
-  > `Traceback`（可能出现在 `cat`、`grep` 等命令的合法输出里）。
+  > **不看框架 `status`**：LangChain 的 `BaseTool.run` 无论成败都把 `status`
+  > 显式置为 `"success"`（DeerFlow 的 bash 失败时也是），采信它会把失败记成成功。
+  > **也不做文本特征匹配**：早期版本按 `Exit Code:` / `Error:` /
+  > `timeout: failed to run command` 等猜成败，容易误伤合法输出，已整体移除。
+  >
+  > 只看**顶层键**：嵌套在 `data` 里的 `ok` 属于业务子状态（如 `status: draft`），
+  > 不代表这次工具调用本身的成败。
 - 框架注入的 `HumanMessage`（`hide_from_ui`，如 memory 画像、动态上下文）记为
   `reasoning`，来源标签记在 Trace 级 `metadata.deerflow_injected`，不算 `user_query`。
 - 澄清续跑（`ask_clarification` 中断后另起 `run_id`）**并入同一轮 trace**，
@@ -317,10 +312,11 @@ step 5  tool_response   span=span_C   parent=span_A
 
 ### 5.1 质量与工程
 
-- [ ] **补测试**：仓库目前无 `tests/`，`pyproject.toml` 也没有 pytest 依赖；
-      M0–M3 的交付判据（契约校验、异常路径、传输可靠性）都还没有自动化覆盖。
-      计划覆盖：契约合法/非法样本、turn 生命周期与异常路径、
-      contextvars 并发隔离、spool 落盘与补发、各导出器输出。
+ - [x] **已有测试**：`tests/` 覆盖脱敏三层防线、`tool_success` 判定、
+       Trace 级统计聚合、contextvars 跨线程/asyncio 行为与 step 装饰器降级；
+       用标准库 `unittest` 运行（`pyproject.toml` 未引入 pytest 依赖）。
+ - [ ] **补测试**：契约合法/非法样本、turn 生命周期与异常路径、
+       spool 落盘与补发、各导出器输出仍无自动化覆盖。
 - [ ] `HttpExporter.close()` 目前只停后台线程，不 flush 队列里剩余的数据；
       进程退出（`atexit`）时可能丢尾部数据，需要补一次收尾 flush。
 - [x] 契约已全部收紧为 `extra="forbid"`（`Step` / `Trace` / `ToolCall` / `Config`）。

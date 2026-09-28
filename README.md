@@ -20,17 +20,42 @@ Agent 运行轨迹采集 SDK。业务方以**最小改动**接入后，SDK 自�
 **业务方（从 GitHub 私有仓库安装）**：
 
 ```bash
-pip install "git+https://github.com/pfy0/agent_trace_sdk.git@v0.4.4"
+pip install "git+https://github.com/pfy0/agent_trace_sdk.git@v0.5.0"
 ```
 
 - 需要：机器能访问 GitHub、装了 `git`、对仓库有读权限。
 - 私有仓库还需带上凭证（SSH key 或 Token）：
-  `pip install "git+ssh://git@github.com/pfy0/agent_trace_sdk.git@v0.4.4"`
+  `pip install "git+ssh://git@github.com/pfy0/agent_trace_sdk.git@v0.5.0"`
 - 装可选依赖（Excel 导出等）：
-  `pip install "agent-trace-sdk[all] @ git+https://github.com/pfy0/agent_trace_sdk.git@v0.4.4"`
+  `pip install "agent-trace-sdk[all] @ git+https://github.com/pfy0/agent_trace_sdk.git@v0.5.0"`
 
 固定 tag 安装，版本可复现。完整说明（Token 配置、升级、离线 wheel、
 DeerFlow/uv 安装）见 `docs/distribute.md`。
+
+### v0.5.0 变更提示（tool_success 只认 JSON + Trace 级统计自动聚合）
+
+**不向后兼容**：
+
+- **`tool_success` 判定收敛为「只看工具返回体 JSON」**。取返回体**顶层**的
+  `success` / `ok` / `is_success` / `succeeded`（布尔值或 `"true"`/`"false"`
+  字符串）：为真 → `1`，为假 → `0`；没有工具调用、返回体不是 JSON、或顶层没有
+  这些键 → `-1`（未知）。
+  - 不再采信框架的 `ToolMessage.status`：LangChain 无论成败都显式置 `"success"`，
+    采信它会把失败记成成功。
+  - 不再做文本特征匹配：早期版本按 `Exit Code:` / `Error:` /
+    `timeout: failed to run command` 等猜成败，容易误伤合法输出，已整体移除。
+  - **影响**：返回纯文本的工具（如 DeerFlow `bash`）无论实际成败都记 `-1`；
+    `tool_error_counts` 只统计 JSON 里明确 `success: false` 的调用。下游若按
+    `tool_success` 统计成功率，需同步调整口径。
+  - 只看顶层键：嵌套在 `data` 里的 `ok` 属于业务子状态（如 `status: draft`），
+    不代表这次调用本身失败。
+
+**新增能力**：
+
+- **Trace 级统计由 SDK 自动聚合**（此前是预留空位）：`toolsets_used`、
+  `tool_stats`、`tool_error_counts`、`token_usage`，在 `as_trace()` 里按
+  `conversations` 汇总。业务方仍可用 `Turn(..., tool_stats=...)` 等覆盖自动值。
+  聚合规则见下方「Trace 级统计的聚合规则」。
 
 ### v0.4.4 变更提示（脱敏默认层增强 + 移除离线导入）
 
@@ -237,8 +262,9 @@ Trace 字段（与公司《轨迹数据规范》对齐）：
 - 会话内容：`conversations_type`（缺省 `openai_messages`）与 `conversations`
   （该轮全部 step 的数组）。
 - 结束状态：`completed` / `partial`。
-- 统计（可选）：`api_calls`、`toolsets_used`、`tool_stats`、`tool_error_counts`、
-  `token_usage`。
+- 统计：`toolsets_used`、`tool_stats`、`tool_error_counts`、`token_usage`
+  **由 SDK 在 `as_trace()` 里按 `conversations` 自动聚合**；`api_calls`
+  仍为预留空位（SDK 不填）。没有工具调用 / token 数据的轮次不产出对应字段。
 - 扩展（可选）：`metadata`、`extra_info`。
 
 **契约严格性**：`Step` / `Trace` / `ToolCall` / `Config` 都是 `extra="forbid"`，
@@ -249,6 +275,36 @@ Trace 字段（与公司《轨迹数据规范》对齐）：
 取代了早期的单一 `status` 字段。**结束状态只在 Trace 级，Step 级没有**。
 
 `message_id` 校验**只查格式、不查序号连续性**（历史数据存在类型内自增与全局位置两种编号）。
+
+### Trace 级统计的聚合规则
+
+`as_trace()` 按 `conversations` 自动汇总（业务方可用 `Turn(..., tool_stats=...)`
+等 Trace 字段覆盖自动值）：
+
+| 字段 | 来源 | 规则 |
+| :--- | :--- | :--- |
+| `toolsets_used` | `tool_call` 的 `function.name`、`tool_response` 的 `tool_name` | 去重，按首次出现排序 |
+| `tool_stats` | `tool_response` 的 `tool_name` + `tool_success` | 每工具 `{total, success, failure, unknown}`，`unknown` 承接 `-1` |
+| `tool_error_counts` | `tool_stats` | 只保留 `failure > 0` 的工具，值为失败次数 |
+| `token_usage` | 各 step 的 `prompt_tokens_delta` / `completion_tokens_delta` | 求和为 `{prompt_tokens, completion_tokens, total_tokens}` |
+
+示例（一次调用 `read_file` 成功、一次 `draft_course` 失败）：
+
+```json
+{
+  "toolsets_used": ["read_file", "draft_course"],
+  "tool_stats": {
+    "read_file": {"total": 1, "success": 1, "failure": 0, "unknown": 0},
+    "draft_course": {"total": 1, "success": 0, "failure": 1, "unknown": 0}
+  },
+  "tool_error_counts": {"draft_course": 1},
+  "token_usage": {"prompt_tokens": 120, "completion_tokens": 45, "total_tokens": 165}
+}
+```
+
+`tool_success == -1`（判不出成败）计入 `unknown`，因此恒有
+`total == success + failure + unknown`；只有 `success` / `failure` 两列时
+该等式不成立，故保留 `unknown` 一列。
 
 ## 框架集成：DeerFlow
 
@@ -288,13 +344,14 @@ plugins:
   动态上下文提醒、待办提醒等）记为 `reasoning`，来源标签记在 Trace 级
   `metadata.deerflow_injected`（值为 `injected` / `dynamic_context`）。判定规则与 DeerFlow 自身的
   `_is_genuine_user_message` 一致：澄清答复虽带 `hide_from_ui`，但仍属真实用户输入。
-- **`tool_success` 判定**：**返回文本里的失败证据优先于 `status`**。LangChain 的
-  `BaseTool.run` 无论成败都会把 `status` 显式传给 `ToolMessage`（成功也是
-  `"success"`，DeerFlow 的 bash 失败时同样如此），所以先信 status 会把失败误判为
-  成功。判定顺序：① 文本命中权威错误特征 → `0`（整行 `Exit Code: <非0>`、整行
-  `Command timed out after ...`、开头 `Error: ...`）；② 否则显式 `status="error"`
-  → `0`；③ 否则显式 `status="success"` → `1`；④ 判不出记 `-1` 未知。`Std Error:`
-  等弱特征不再作为失败信号（stderr 非空但 `rc==0` 是成功）。
+- **`tool_success` 判定**：**只看工具返回体 JSON 顶层的成败布尔值**。
+  取 `success` / `ok` / `is_success` / `succeeded`，为真 → `1`，为假 → `0`；
+  其余（没有工具调用、返回体不是 JSON、顶层没有这些键）一律 `-1`（未知）。
+  **不看框架的 `ToolMessage.status`**（LangChain 无论成败都显式置 `"success"`，
+  采信它会把失败记成成功），**也不再做文本特征匹配**（早期版本按
+  `Exit Code:` / `Error:` / `timeout:` 猜，容易误伤合法输出，已移除）。
+  只看**顶层键**：嵌套在 `data` 里的 `ok` 属于业务子状态（如 `status: draft`），
+  不代表这次调用失败。
 - 初始 state 里携带的历史消息不会重复采集（以最后一条真实用户消息为界）。
 - 无 langchain 的环境下本模块仍可 import（中间件退化为普通类，便于纯逻辑单测）。
 
