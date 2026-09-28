@@ -392,6 +392,19 @@ from agent_trace.integrations.deerflow import AgentTraceMiddleware
 agent = create_agent(model=..., tools=[...], middleware=[AgentTraceMiddleware(tracer)])
 ```
 
+## 接入方式总览
+
+SDK 提供三种接入方式，全部含可运行示例，详见 **`docs/integration-methods.md`**：
+
+| 方式 | 适用场景 | 改动量 |
+| :--- | :--- | :--- |
+| ① 手动埋点 API（含 `with turn.step(...)` 自动计时写法） | 任意框架、自研 Agent，逐步精确控制 | 每个 step 一行调用 |
+| ② 装饰器 `@tracer.trace` / `@tracer.step` | 已函数化、边界清晰的一轮 / 一步 | 加一个装饰器 |
+| ③ 框架集成（DeerFlow / LangGraph 中间件） | 跑在 DeerFlow / LangGraph 上 | **零业务改动** |
+
+> 该文档同时对比了阿里云 AgentLoop 的三条管道（eBPF / LoongSuite Pilot / 语言与框架探针），
+> 说明本项目「不止手动埋点」的边界与取舍。
+
 ## 发布
 
 当前用 **git tag** 分发（不依赖私有 PyPI）：
