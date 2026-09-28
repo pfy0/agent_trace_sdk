@@ -590,6 +590,15 @@ class Tracer:
             def wrapper(*args: Any, **kwargs: Any) -> Any:
                 turn = ctx.get_current_turn()
                 if turn is None:
+                    # 没有 turn 上下文（如在线程池 / 子线程里执行）：采集是旁路，
+                    # 照常执行业务函数，但埋点会被跳过。默认静默，debug 时告警，
+                    # 避免「在线程里埋点全丢」而无人察觉。
+                    if self.config.debug:
+                        logger.warning(
+                            "step 装饰器在无 turn 上下文时执行，埋点被跳过: %s"
+                            "（contextvars 不跨线程传播；需要在线程内采集请显式传 Turn）",
+                            getattr(func, "__qualname__", func),
+                        )
                     return func(*args, **kwargs)
                 with turn.step(resolved) as step_ctx:
                     result = func(*args, **kwargs)

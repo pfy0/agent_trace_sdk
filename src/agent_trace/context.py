@@ -1,7 +1,15 @@
-"""contextvars 实现 trace 上下文传播，支持 async 与并发任务。
+"""contextvars 实现 trace 上下文传播。
 
-业务方在 `Tracer.turn()` 里埋点，子协程 / 子线程可以拿到当前 turn，
-无需层层传参。contextvars 在 asyncio 任务间自动隔离，不会串线。
+业务方在 `Tracer.turn()` 里埋点后，**同一线程内**可隐式取到当前 turn，
+无需层层传参；asyncio 子任务在创建时会自动复制当前 Context，因此也能取到，
+且任务间互相隔离、不会串线。
+
+**跨线程不传播**：`threading.Thread` / 线程池启动的新线程使用独立的空 Context，
+读不到调用线程设置的 turn（`contextvars` 的设计语义，非缺陷）。因此
+`Tracer.step` / `Tracer.trace` 装饰器若在线程池等**子线程**里执行，`get_current_turn()`
+会返回 `None`，埋点将被跳过。需要在线程里采集时，请**显式传递 `Turn`**（用
+`turn.record_*`），或在线程入口用 `contextvars.copy_context().run(...)` 手动带上
+Context。
 """
 from __future__ import annotations
 
@@ -17,7 +25,11 @@ _current_turn: contextvars.ContextVar[Optional["Turn"]] = contextvars.ContextVar
 )
 
 def get_current_turn() -> Optional["Turn"]:
-    """返回当前上下文里的 Turn，没有则 None。"""
+    """返回**当前线程**上下文里的 Turn，没有则 None。
+
+    注意：`contextvars` 不会自动传播到新线程，子线程 / 线程池里调用本函数
+    通常得到 None（asyncio 子任务则会自动继承）。详见模块文档。
+    """
     return _current_turn.get()
 
 
