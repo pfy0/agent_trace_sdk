@@ -354,14 +354,25 @@ python examples/deerflow_integration.py  # DeerFlow 中间件集成
 
 默认**开启**：在交给导出器之前，按规则擦除 `step.content` 与
 `tool_calls[].function.arguments` 里的敏感信息，命中片段替换为
-`[REDACTED:规则名]`（保留键名，便于排查哪类泄露过）。
+`[REDACTED:规则名]`（保留键名，便于排查哪类泄露过）。零第三方依赖，结果确定可复现。
 
-默认规则：API key（`sk-` / `apikey-` / Langfuse `lsv2_pt_` 等）、
-`API_KEY=` / `PASSWORD=` 等凭据赋值、JWT、URL 内嵌凭据
-（`postgres://user:pass@host`）、邮箱、手机号、身份证、银行卡号。
+三层防线，前一层兜住后一层认不出的：
+
+1. **敏感键名**：工具参数里 key 命中 `password` / `token` / `api_key` /
+   `authorization` 等时，其值**整段**替换（不看值的形态）。结构化凭据
+   `{"password": "hunter2"}` 不符合任何前缀特征，只有这一层能兜住；值是
+   dict/list 时连子结构一起擦除。
+2. **文本正则**：API key（`sk-` / `apikey-` / Langfuse `lsv2_pt_` 等）、
+   `API_KEY=` / `"password": "..."` 等凭据赋值（含 JSON 风格）、JWT、
+   URL 内嵌凭据（`postgres://user:pass@host`）、邮箱、手机号、身份证、银行卡号。
+3. **高熵串**：没有已知前缀、但字符分布像随机密钥的长 token（hex 与
+   base64/alnum 分别设阈值，并要求同时含字母和数字，不误伤普通长单词）。
+
+> 键名判定按分隔符切词（`MYSQL_PASSWORD` / `auth_token` / `apiKey` 都能命中），
+> 但 `max_tokens` / `token_count` / `password_length` 这类**计数/描述键**会豁免。
 
 ```python
-from agent_trace import Tracer, Redactor, RedactionRule
+from agent_trace import Tracer, Redactor, RedactionRule, EntropyRule, default_rules
 
 # 整体关闭
 Tracer(agent_id="a", redact=False)
@@ -369,10 +380,18 @@ Tracer(agent_id="a", redact=False)
 # 只脱敏 content，保留工具参数
 Tracer(agent_id="a", redact_arguments=False)
 
+# 关闭「按敏感键名整段擦除」，只跑文本规则
+Tracer(agent_id="a", redactor=Redactor(redact_keys=False))
+
+# 追加自定义敏感键名（与内置键名同等判定）
+Tracer(agent_id="a", redactor=Redactor(sensitive_keys=["employee_no", "id_card_no"]))
+
 # 自定义规则（在默认规则基础上追加）
-from agent_trace import default_rules
 rules = default_rules() + [RedactionRule.build("internal_id", r"EMP-\d{6}")]
 Tracer(agent_id="a", redactor=Redactor(rules))
+
+# 调整高熵阈值（熵越低越激进，越长越保守）
+Tracer(agent_id="a", redactor=Redactor(default_rules()[:-1] + [EntropyRule(generic_entropy=4.0)]))
 ```
 
 ## 说明

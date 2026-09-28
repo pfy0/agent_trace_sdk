@@ -27,7 +27,7 @@ from .exporters import (
     XlsxExporter,
 )
 from .ingest import split_by_turn
-from .redact import RedactionRule, Redactor, default_rules
+from .redact import EntropyRule, RedactionRule, Redactor, default_rules, is_sensitive_key
 from .schemas import (
     MESSAGE_TYPE_META,
     MessageType,
@@ -64,7 +64,9 @@ __all__ = [
     "TransportError",
     "Redactor",
     "RedactionRule",
+    "EntropyRule",
     "default_rules",
+    "is_sensitive_key",
     "get_current_turn",
     "generate_id",
     "generate_message_id",
