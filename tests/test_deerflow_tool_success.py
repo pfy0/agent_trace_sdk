@@ -1,11 +1,15 @@
 """DeerFlow `tool_success` 判定回归测试。
 
-判定依据已收敛为**只看工具返回体 JSON 顶层的成败布尔值**：
-`success` / `ok` / `is_success` / `succeeded` 为真 -> 1，为假 -> 0；
-其余（没有工具调用、不是 JSON、顶层无成败标记）一律 -1（未知）。
+两层判定：
 
-不再采信框架的 `ToolMessage.status`（LangChain 无论成败都显式置 `"success"`），
-也不再做文本特征匹配（`Exit Code:` / `Error:` / `timeout:` 等已移除）。
+1. **显式成败**：返回体 JSON 顶层带 `success` / `ok` / `is_success` / `succeeded`
+   （布尔值或 `"true"`/`"false"` 字符串）-> 按它判定，为真 `1`、为假 `0`；
+2. **兜底**：
+   - 文本以 `Error` 开头（DeerFlow / 业务工具的失败约定）-> `0`；
+   - 能解析为 JSON 对象、只是没带成败键 -> `1`；
+   - 其余 -> `-1`（未知）。
+
+不采信框架的 `ToolMessage.status`（LangChain 无论成败都显式置 `"success"`）。
 
 运行：
     python -m unittest discover -s tests -v
@@ -30,7 +34,9 @@ class _Message:
         self.model_fields_set = {"status"} if explicit else set()
 
 
-class JsonVerdictTest(unittest.TestCase):
+class FirstLayerExplicitVerdictTest(unittest.TestCase):
+    """第一层：JSON 顶层显式的成败布尔值。"""
+
     def _msg(self, status: str = "success") -> _Message:
         return _Message(status)
 
@@ -62,38 +68,59 @@ class JsonVerdictTest(unittest.TestCase):
         payload = {"success": True, "data": {"ok": False}}
         self.assertEqual(_tool_success(self._msg(), json.dumps(payload)), 1)
 
+    def test_explicit_verdict_wins_over_error_text(self) -> None:
+        # 第一层优先于第二层
+        text = json.dumps({"success": True}) + "\nError: trailing noise"
+        self.assertEqual(_tool_success(self._msg(), text), 1)
+
     def test_json_with_trailing_diagnostic_still_parsed(self) -> None:
         text = json.dumps({"success": False}) + "\nExit Code: 1\n"
         self.assertEqual(_tool_success(self._msg(), text), 0)
 
 
-class UnknownFallbackTest(unittest.TestCase):
-    """判不出就记 -1：既不看框架 status，也不做文本特征匹配。"""
+class SecondLayerFallbackTest(unittest.TestCase):
+    """第二层：没有显式成败键时的兜底。"""
 
-    def test_plain_text_is_unknown_even_when_status_success(self) -> None:
-        self.assertEqual(_tool_success(_Message("success"), "all good\n"), -1)
+    def _msg(self, status: str = "success") -> _Message:
+        return _Message(status)
 
-    def test_json_without_verdict_key_is_unknown(self) -> None:
-        self.assertEqual(_tool_success(_Message(), json.dumps({"courses": ["a", "b"]})), -1)
+    def test_json_without_verdict_key_is_success(self) -> None:
+        # 搜索结果这类结构化结果：没带 success，但能解析成对象即说明跑通了
+        payload = {
+            "query": "中国代表团 名古屋亚运会 半程",
+            "total_results": 5,
+            "results": [{"title": "中国军团一枝独秀", "url": "https://m.gmw.cn/x.htm"}],
+        }
+        self.assertEqual(_tool_success(self._msg(), json.dumps(payload, ensure_ascii=False)), 1)
+
+    def test_error_prefixed_text_is_failure(self) -> None:
+        # 真实样本：Jina 抓取超时
+        text = "Error: Request to Jina API failed: ConnectTimeout: "
+        self.assertEqual(_tool_success(self._msg(), text), 0)
+
+    def test_error_prefix_is_case_insensitive_and_lstrip(self) -> None:
+        self.assertEqual(_tool_success(self._msg(), "  error: boom"), 0)
+        self.assertEqual(_tool_success(self._msg(), "ERROR: boom"), 0)
+
+    def test_error_substring_in_body_is_not_failure(self) -> None:
+        # 只有开头才算：正文里出现 error 不算失败
+        self.assertEqual(_tool_success(self._msg(), "the errors are common\n"), -1)
+
+    def test_error_dash_forms_are_failure(self) -> None:
+        self.assertEqual(_tool_success(self._msg(), "Error - boom"), 0)
+
+    def test_plain_text_is_unknown(self) -> None:
+        self.assertEqual(_tool_success(self._msg(), "just some output\n"), -1)
 
     def test_non_object_json_is_unknown(self) -> None:
-        self.assertEqual(_tool_success(_Message(), json.dumps([1, 2, 3])), -1)
+        # 数组不是对象，不算结构化结果
+        self.assertEqual(_tool_success(self._msg(), json.dumps([1, 2, 3])), -1)
 
     def test_empty_text_is_unknown(self) -> None:
-        self.assertEqual(_tool_success(_Message(), ""), -1)
+        self.assertEqual(_tool_success(self._msg(), ""), -1)
 
-    def test_error_text_is_no_longer_special_cased(self) -> None:
-        # 文本特征已移除：这些过去会判 0 的输入现在记 -1
-        for text in (
-            "Error: boom",
-            "out\nExit Code: 1\n",
-            "Command timed out after 30s",
-            "timeout: failed to run command '.venv/bin/python': No such file or directory\n",
-        ):
-            self.assertEqual(_tool_success(_Message("success"), text), -1, text)
-
-    def test_framework_status_error_is_no_longer_special_cased(self) -> None:
-        # 框架 status="error" 也不再看：没有 JSON 判定就是 -1
+    def test_framework_status_error_is_not_trusted(self) -> None:
+        # 框架 status="error" 不参与判定：纯文本仍是 -1
         self.assertEqual(_tool_success(_Message("error"), "whatever"), -1)
 
 

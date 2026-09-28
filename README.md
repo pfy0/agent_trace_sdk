@@ -20,17 +20,33 @@ Agent 运行轨迹采集 SDK。业务方以**最小改动**接入后，SDK 自�
 **业务方（从 GitHub 私有仓库安装）**：
 
 ```bash
-pip install "git+https://github.com/pfy0/agent_trace_sdk.git@v0.5.0"
+pip install "git+https://github.com/pfy0/agent_trace_sdk.git@v0.5.1"
 ```
 
 - 需要：机器能访问 GitHub、装了 `git`、对仓库有读权限。
 - 私有仓库还需带上凭证（SSH key 或 Token）：
-  `pip install "git+ssh://git@github.com/pfy0/agent_trace_sdk.git@v0.5.0"`
+  `pip install "git+ssh://git@github.com/pfy0/agent_trace_sdk.git@v0.5.1"`
 - 装可选依赖（Excel 导出等）：
-  `pip install "agent-trace-sdk[all] @ git+https://github.com/pfy0/agent_trace_sdk.git@v0.5.0"`
+  `pip install "agent-trace-sdk[all] @ git+https://github.com/pfy0/agent_trace_sdk.git@v0.5.1"`
 
 固定 tag 安装，版本可复现。完整说明（Token 配置、升级、离线 wheel、
 DeerFlow/uv 安装）见 `docs/distribute.md`。
+
+### v0.5.1 变更提示（tool_success 增加第二层兜底）
+
+**行为变化**（v0.5.0 的「只认 JSON 显式成败」仍是第一层，本次在其后补兜底）：
+
+- **`tool_success` 改为两层判定**。第一层**显式成败**：返回体 JSON **顶层**带
+  `success` / `ok` / `is_success` / `succeeded`（布尔值或 `"true"`/`"false"`）
+  时，为真 → `1`，为假 → `0`。第一层取不到值时才走第二层**兜底**：文本以
+  `Error` 开头 → `0`；能解析成 JSON 对象、只是没带成败键（如搜索结果
+  `{"query": ..., "results": [...]}`，结构化结果本身就说明调用跑通了）→ `1`；
+  其余 → `-1`（未知），**不猜**。
+  - **影响**：v0.5.0 里判为 `-1` 的无成败键结构化 JSON，现在记 `1`；纯文本工具
+    仍记 `-1`，除非文本以 `Error` 开头（DeerFlow 各工具 `return f"Error: {e}"`
+    的统一失败约定）。下游若按 `tool_success` 统计成功率，口径需同步调整。
+  - 仍然**不采信框架的 `ToolMessage.status`**，也**不按 `Exit Code:` /
+    `timeout:` 等文本特征猜**，失败文本只认 `Error` 前缀这一条约定。
 
 ### v0.5.0 变更提示（tool_success 只认 JSON + Trace 级统计自动聚合）
 
@@ -344,14 +360,18 @@ plugins:
   动态上下文提醒、待办提醒等）记为 `reasoning`，来源标签记在 Trace 级
   `metadata.deerflow_injected`（值为 `injected` / `dynamic_context`）。判定规则与 DeerFlow 自身的
   `_is_genuine_user_message` 一致：澄清答复虽带 `hide_from_ui`，但仍属真实用户输入。
-- **`tool_success` 判定**：**只看工具返回体 JSON 顶层的成败布尔值**。
-  取 `success` / `ok` / `is_success` / `succeeded`，为真 → `1`，为假 → `0`；
-  其余（没有工具调用、返回体不是 JSON、顶层没有这些键）一律 `-1`（未知）。
+- **`tool_success` 判定（两层）**：
+  1. **显式成败**：返回体 JSON **顶层**带 `success` / `ok` / `is_success` /
+     `succeeded`，为真 → `1`，为假 → `0`；
+  2. **兜底**：文本以 `Error` 开头 → `0`；能解析成 JSON 对象但没带成败键
+     （结构化结果本身说明调用跑通了，如搜索结果 `{"query": ..., "results": [...]}`）
+     → `1`；其余 → `-1`（未知），**不猜**。
+
   **不看框架的 `ToolMessage.status`**（LangChain 无论成败都显式置 `"success"`，
-  采信它会把失败记成成功），**也不再做文本特征匹配**（早期版本按
-  `Exit Code:` / `Error:` / `timeout:` 猜，容易误伤合法输出，已移除）。
-  只看**顶层键**：嵌套在 `data` 里的 `ok` 属于业务子状态（如 `status: draft`），
-  不代表这次调用失败。
+  采信它会把失败记成成功），**也不按 `Exit Code:` / `timeout:` 等文本特征猜**
+  （容易误伤合法输出）；失败文本只认 `Error` 前缀这一条约定，对应 DeerFlow
+  各工具 `return f"Error: {e}"` 的统一失败写法。只看**顶层键**：嵌套在
+  `data` 里的 `ok` 属于业务子状态（如 `status: draft`），不代表这次调用失败。
 - 初始 state 里携带的历史消息不会重复采集（以最后一条真实用户消息为界）。
 - 无 langchain 的环境下本模块仍可 import（中间件退化为普通类，便于纯逻辑单测）。
 

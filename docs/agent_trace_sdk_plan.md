@@ -1,6 +1,6 @@
 # Agent 运行轨迹采集 SDK — 现状与待办
 
-> 状态：与代码对齐（v0.5.0；v0.4.0 为契约破坏性变更：Step 去字段 + 契约收紧）
+> 状态：与代码对齐（v0.5.1；v0.4.0 为契约破坏性变更：Step 去字段 + 契约收紧）
 > 范围：Python 优先（`requires-python >= 3.9`）
 > 最后更新：2026-09-28
 >
@@ -222,14 +222,18 @@ step 5  tool_response   span=span_C   parent=span_A
   带 `tool_calls` 的 `AIMessage.content` → `reasoning`；
   末条不带 `tool_calls` 的 AI 文本升级为 `final_answer`；
   `AIMessage.tool_calls` 合并为 1 个 `tool_call` step；`ToolMessage` → `tool_response`。
-- `tool_success` 判定。**只看工具返回体 JSON 顶层的成败布尔值**：取 `success` /
-  `ok` / `is_success` / `succeeded`，为真 → `1`，为假 → `0`；没有工具调用、
-  返回体不是 JSON、或顶层没有这些键 → `-1`（未知）。
+- `tool_success` 判定（两层）。
+  1. **显式成败**：返回体 JSON **顶层**带 `success` / `ok` / `is_success` /
+     `succeeded`，为真 → `1`，为假 → `0`；
+  2. **兜底**：文本以 `Error` 开头 → `0`；能解析成 JSON 对象但没带成败键
+     （结构化结果本身说明调用跑通了，如搜索结果 `{"query": ..., "results": [...]}`）
+     → `1`；没有工具调用或其余情况 → `-1`（未知），**不猜**。
 
   > **不看框架 `status`**：LangChain 的 `BaseTool.run` 无论成败都把 `status`
   > 显式置为 `"success"`（DeerFlow 的 bash 失败时也是），采信它会把失败记成成功。
-  > **也不做文本特征匹配**：早期版本按 `Exit Code:` / `Error:` /
-  > `timeout: failed to run command` 等猜成败，容易误伤合法输出，已整体移除。
+  > **也不按 `Exit Code:` / `timeout:` 等文本特征猜**（容易误伤合法输出）；
+  > 失败文本只认 `Error` 前缀这一条约定，对应 DeerFlow 各工具
+  > `return f"Error: {e}"` 的统一写法。
   >
   > 只看**顶层键**：嵌套在 `data` 里的 `ok` 属于业务子状态（如 `status: draft`），
   > 不代表这次工具调用本身的成败。
