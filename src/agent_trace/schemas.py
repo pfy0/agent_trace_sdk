@@ -229,7 +229,7 @@ class Trace(BaseModel):
 
         # 边界由 turn_id 决定：同一 turn_id 下的多条 user_query 属于同一轮，
         # 按数组顺序区分——第一条是初始输入，其余是追问/补充，不做切分。
-        # 多轮对话的切分只能通过 turn_id（见 ingest.split_by_turn）。
+        # 多轮对话的切分只能通过 turn_id（由业务方保证一轮一个 turn_id）。
         user_queries = [
             step for step in self.conversations if step.message_type is MessageType.USER_QUERY
         ]
@@ -251,61 +251,6 @@ class Trace(BaseModel):
                     "step_no 必须从 1 递增：第 %d 个 step 的 step_no=%s" % (index, step.step_no)
                 )
         return self
-
-    @classmethod
-    def from_raw(
-        cls,
-        payload: Dict[str, Any],
-        conversation_key: str = "conversations",
-    ) -> "Trace":
-        """从上报/导入的裸字典构造 Trace；兼容 messages / conversation / conversations 键名。
-
-        若 step 缺少 step_no，按数组顺序自动补 1..N。
-
-        历史数据里可能存在规范外的字段（如 `status`、`timestamp`、Step 级 `meta`），
-        这些字段会被静默丢弃，避免 extra="forbid" 直接报错。
-        """
-        step_fields = set(Step.model_fields)
-        call_fields = set(ToolCall.model_fields)
-        trace_fields = set(cls.model_fields)
-        data = dict(payload)
-        raw_steps = None
-        for key in (conversation_key, "conversations", "conversation", "messages"):
-            if isinstance(data.get(key), list):
-                raw_steps = data.pop(key)
-                break
-        if raw_steps is None:
-            raise ValueError("未找到 conversations / conversation / messages 数组")
-        # 剥离规范外的 trace 级字段（历史数据可能带 status 等）
-        data = {key: value for key, value in data.items() if key in trace_fields}
-
-        steps: List[Dict[str, Any]] = []
-        for index, raw in enumerate(raw_steps, start=1):
-            step = {
-                key: value
-                for key, value in dict(raw).items()
-                if key in step_fields or key == "timestamp"
-            }
-            step.setdefault("step_no", index)
-            # tool_calls 同样按模型字段过滤：OpenAI 风格调用常带 index 等附加键
-            raw_calls = step.get("tool_calls")
-            if isinstance(raw_calls, list):
-                step["tool_calls"] = [
-                    {key: value for key, value in call.items() if key in call_fields}
-                    if isinstance(call, dict)
-                    else call
-                    for call in raw_calls
-                ]
-            # 兼容历史数据：只有 timestamp 时映射为 start_time / end_time
-            legacy_ts = step.pop("timestamp", None)
-            if legacy_ts is not None:
-                step.setdefault("start_time", legacy_ts)
-                step.setdefault("end_time", legacy_ts)
-            # span_id 缺省时由模型 default_factory 生成
-            steps.append(step)
-
-        data["conversations"] = steps
-        return cls.model_validate(data)
 
     def serializable(self) -> Dict[str, Any]:
         """序列化为上报/导出用的字典，丢弃空值字段。"""

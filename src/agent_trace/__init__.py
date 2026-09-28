@@ -26,7 +26,6 @@ from .exporters import (
     MemoryExporter,
     XlsxExporter,
 )
-from .ingest import split_by_turn
 from .redact import EntropyRule, RedactionRule, Redactor, default_rules, is_sensitive_key
 from .schemas import (
     MESSAGE_TYPE_META,
@@ -71,5 +70,4 @@ __all__ = [
     "generate_id",
     "generate_message_id",
     "iso_timestamp",
-    "split_by_turn",
 ]

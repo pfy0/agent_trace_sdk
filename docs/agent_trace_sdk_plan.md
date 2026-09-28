@@ -35,7 +35,6 @@ src/agent_trace/
 ├── tracer.py         # 采集层：Tracer / Turn / 手动埋点 / 装饰器
 ├── context.py        # contextvars：当前 turn，支持 async / 并发
 ├── config.py         # 配置：环境变量 + 代码初始化
-├── ingest.py         # 离线导入：多轮数据按 turn_id 切分（不改动入参）
 ├── redact.py         # 脱敏：可配规则擦除凭据 / 个人标识
 ├── integrations/
 │   └── deerflow.py   # DeerFlow / LangGraph 中间件（自动采集轨迹）
@@ -77,8 +76,7 @@ docs/                 # 本文 + distribute.md（安装与发布）
 > `timestamp` 已按要求换成 `start_time` / `end_time`。
 > **Step 不再有 `completed` / `partial` / `error` / `meta`**：结束状态只在 Trace 级，
 > 扩展信息统一走 Trace 级 `metadata`。`Step` / `Trace` / `ToolCall` / `Config`
-> 全部 `extra="forbid"`，规范外字段直接拒绝（`Trace.from_raw()` 导入历史数据时
-> 会按模型字段过滤，不因此报错）。
+> 全部 `extra="forbid"`，规范外字段直接拒绝。
 
 `Trace` 字段（与公司《轨迹数据规范》逐项对齐，共 27 个）：
 
@@ -111,12 +109,8 @@ docs/                 # 本文 + distribute.md（安装与发布）
 - `message_type=tool_response` 时 `tool_call_id` 必填。
 - `is_follow_up` 只能出现在 `user_query` 上。
 
-`Trace.from_raw()` 兼容 `conversations` / `conversation` / `messages` 三种数组键名，
-缺 `step_no` 时按数组顺序补 1..N；缺 `turn_no` / `completed` / `partial` /
-`conversations_type` 时取默认值（1 / true / false / `openai_messages`）。
-
-> `Trace.from_raw()` 会按模型字段过滤入参：规范外的 trace 级 / step 级字段
-> （如 `status`、Step 级 `meta`）在导入时被静默丢弃，以兼容历史数据。
+缺 `turn_no` / `completed` / `partial` / `conversations_type` 时取默认值
+（1 / true / false / `openai_messages`）。
 
 ### 2.2 采集层 `tracer.py`
 
@@ -252,21 +246,13 @@ step 5  tool_response   span=span_C   parent=span_A
   重新提问时，暂存的澄清轮会兜底提交，数据不丢。
 - 无 `langchain` 时中间件退化为普通类，仍可 import 做纯逻辑单测。
 
-### 2.9 离线导入 `ingest.py`
-
-`split_by_turn(payload, session_id=None, **trace_meta)`：在任意嵌套结构里递归定位
-step 列表（兼容 `conversations` / `conversation` / `messages`），按 `turn_id` 分桶成
-多条 trace（并按出现顺序自动填 `turn_no`）；
-同轮第 2 条起的 `user_query` 自动标 `is_follow_up`。**不修改调用方传入的数据。**
-
-### 2.10 工具与示例
+### 2.9 工具与示例
 
 - `tools/release.py`：`--build-only` 本地出包 / `--tag` 打版本 tag 并推送。
 - `tools/export_schema.py`：从 pydantic 模型导出 `schema/trace.schema.json` 与
   `schema/enums.json`。
 - `examples/`：`manual_api.py`（最小闭环 + 三种导出）、`decorator.py`（装饰器与
-  异常路径）、`import_data.py`（离线切分）、`deerflow_integration.py`
-  （DeerFlow 中间件）。
+  异常路径）、`deerflow_integration.py`（DeerFlow 中间件）。
 
 ### 2.11 发布
 
@@ -293,7 +279,7 @@ step 列表（兼容 `conversations` / `conversation` / `messages`），按 `tur
 | 时间字段 | `start_time` / `end_time` 取代 `started_at` / `ended_at` | `schemas.Trace` |
 | 扩展元数据 | 只在 Trace 级，字段名 `metadata`；**Step 级 `meta` 已移除** | `schemas.py` |
 | 入库字段 | `id` / `create_time` 由入库侧生成，SDK 留空 | `schemas.Trace` |
-| 多轮数据 | 一个 trace 只收一轮；多轮切分只能按 `turn_id`（`split_by_turn`） | `ingest.py` |
+| 多轮数据 | 一个 trace 只收一轮；多轮切分只能按 `turn_id`，由业务方保证一轮一个 `turn_id` | `schemas.Trace` |
 | 同轮多条用户输入 | 不切分，第 2 条起标 `is_follow_up=True` | `schemas.Step` |
 | `message_id` 序号 | 类型内自增；校验只查格式 | `schemas.py` |
 | `tool_call` 粒度 | 一条消息 = 一个 step，多个调用合并进 `tool_calls` | `tracer.py` |
@@ -338,8 +324,8 @@ step 列表（兼容 `conversations` / `conversation` / `messages`），按 `tur
 - [ ] `HttpExporter.close()` 目前只停后台线程，不 flush 队列里剩余的数据；
       进程退出（`atexit`）时可能丢尾部数据，需要补一次收尾 flush。
 - [x] 契约已全部收紧为 `extra="forbid"`（`Step` / `Trace` / `ToolCall` / `Config`）。
-      OpenAI 风格的 tool_call 常带 `index` 等附加键，`_as_tool_calls()` 与
-      `Trace.from_raw()` 会先按模型字段过滤再校验。
+      OpenAI 风格的 tool_call 常带 `index` 等附加键，`_as_tool_calls()` 会先按模型
+      字段过滤再校验。
 
 ### 5.2 多 agent 支持（已知限制）
 
@@ -395,7 +381,6 @@ pip install -e ".[all]"
 
 python examples/manual_api.py           # 6 步闭环 + JSON/JSONL/XLSX
 python examples/decorator.py            # 装饰器与异常路径
-python examples/import_data.py          # 多轮按 turn_id 切分
 python examples/deerflow_integration.py # DeerFlow 中间件（无 langchain 时优雅退化）
 
 python tools/export_schema.py           # 重新生成 schema/*.json

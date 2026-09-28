@@ -79,8 +79,6 @@ DeerFlow/uv 安装）见 `docs/distribute.md`。
   业务方若之前往 step 里塞自定义键（`meta={...}` 或直接 `**extra`），
   请改为 `Tracer(..., metadata={...})` 或 `Tracer(..., extra_info={...})`；
   写错的配置名（如 `apps_name=`）现在会直接报错，不再静默失效。
-- `Trace.from_raw()`（离线导入）会自动过滤历史数据里的规范外字段——
-  包括 step 顶层字段与嵌套的 `tool_calls`（OpenAI 风格常带 `index`）——不会因此报错。
 
 ### v0.3.0 升级提示（不向后兼容）
 
@@ -230,7 +228,7 @@ Trace 字段（与公司《轨迹数据规范》对齐）：
 - 扩展（可选）：`metadata`、`extra_info`。
 
 **契约严格性**：`Step` / `Trace` / `ToolCall` / `Config` 都是 `extra="forbid"`，
-写入规范外字段会直接报错（`Trace.from_raw()` 导入历史数据时会先过滤）。
+写入规范外字段会直接报错，不再静默丢弃。
 
 结束状态说明：`completed` = 该轮是否**正常跑完**（异常/中断为 `false`）；
 `partial` = 是否因超时等**外部条件被截断**。两者都可为 true/false 组合，
@@ -314,7 +312,6 @@ src/agent_trace/
 ├── tracer.py        # 采集层：Tracer / Turn / 手动埋点 / 装饰器
 ├── context.py       # contextvars 上下文传播
 ├── config.py        # 配置：环境变量 + 代码初始化
-├── ingest.py        # 离线导入与多轮按 turn_id 切分
 ├── redact.py        # 脱敏：可配规则擦除凭据 / 个人标识
 ├── integrations/    # 框架适配（deerflow.py）
 ├── transport/       # HTTP 上报：队列 / 重试 / 失败落盘
@@ -329,7 +326,6 @@ schema/              # 语言无关的 JSON Schema 契约
 ```bash
 python examples/manual_api.py    # 手动埋点最小闭环 + 三种导出
 python examples/decorator.py     # 装饰器与异常路径
-python examples/import_data.py   # 导入现成数据、多轮切分
 python examples/deerflow_integration.py  # DeerFlow 中间件集成
 ```
 
