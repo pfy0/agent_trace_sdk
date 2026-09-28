@@ -20,17 +20,26 @@ Agent 运行轨迹采集 SDK。业务方以**最小改动**接入后，SDK 自�
 **业务方（从 GitHub 私有仓库安装）**：
 
 ```bash
-pip install "git+https://github.com/pfy0/agent_trace_sdk.git@v0.5.1"
+pip install "git+https://github.com/pfy0/agent_trace_sdk.git@v0.5.2"
 ```
 
 - 需要：机器能访问 GitHub、装了 `git`、对仓库有读权限。
 - 私有仓库还需带上凭证（SSH key 或 Token）：
-  `pip install "git+ssh://git@github.com/pfy0/agent_trace_sdk.git@v0.5.1"`
+  `pip install "git+ssh://git@github.com/pfy0/agent_trace_sdk.git@v0.5.2"`
 - 装可选依赖（Excel 导出等）：
-  `pip install "agent-trace-sdk[all] @ git+https://github.com/pfy0/agent_trace_sdk.git@v0.5.1"`
+  `pip install "agent-trace-sdk[all] @ git+https://github.com/pfy0/agent_trace_sdk.git@v0.5.2"`
 
 固定 tag 安装，版本可复现。完整说明（Token 配置、升级、离线 wheel、
 DeerFlow/uv 安装）见 `docs/distribute.md`。
+
+### v0.5.2 变更提示（tool_stats 去掉 unknown 列）
+
+**行为变化**：
+
+- **`tool_stats` 每工具统计去掉 `unknown` 列**，只保留
+  `{total, success, failure}`。`tool_success == -1`（判不出成败）不再单列，
+  只计入 `total`，因此恒有 `total >= success + failure`（差值即判不出的次数），
+  `tool_error_counts` 口径不变（仍只统计 `failure`）。
 
 ### v0.5.1 变更提示（tool_success 增加第二层兜底）
 
@@ -300,7 +309,7 @@ Trace 字段（与公司《轨迹数据规范》对齐）：
 | 字段 | 来源 | 规则 |
 | :--- | :--- | :--- |
 | `toolsets_used` | `tool_call` 的 `function.name`、`tool_response` 的 `tool_name` | 去重，按首次出现排序 |
-| `tool_stats` | `tool_response` 的 `tool_name` + `tool_success` | 每工具 `{total, success, failure, unknown}`，`unknown` 承接 `-1` |
+| `tool_stats` | `tool_response` 的 `tool_name` + `tool_success` | 每工具 `{total, success, failure}`；`-1`（未知）只计入 `total` |
 | `tool_error_counts` | `tool_stats` | 只保留 `failure > 0` 的工具，值为失败次数 |
 | `token_usage` | 各 step 的 `prompt_tokens_delta` / `completion_tokens_delta` | 求和为 `{prompt_tokens, completion_tokens, total_tokens}` |
 
@@ -310,17 +319,16 @@ Trace 字段（与公司《轨迹数据规范》对齐）：
 {
   "toolsets_used": ["read_file", "draft_course"],
   "tool_stats": {
-    "read_file": {"total": 1, "success": 1, "failure": 0, "unknown": 0},
-    "draft_course": {"total": 1, "success": 0, "failure": 1, "unknown": 0}
+    "read_file": {"total": 1, "success": 1, "failure": 0},
+    "draft_course": {"total": 1, "success": 0, "failure": 1}
   },
   "tool_error_counts": {"draft_course": 1},
   "token_usage": {"prompt_tokens": 120, "completion_tokens": 45, "total_tokens": 165}
 }
 ```
 
-`tool_success == -1`（判不出成败）计入 `unknown`，因此恒有
-`total == success + failure + unknown`；只有 `success` / `failure` 两列时
-该等式不成立，故保留 `unknown` 一列。
+`tool_success == -1`（判不出成败）只计入 `total`，不落 `success` / `failure`，
+因此恒有 `total >= success + failure`（判不出的次数即差值）。
 
 ## 框架集成：DeerFlow
 

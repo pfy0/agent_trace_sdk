@@ -141,9 +141,9 @@ def _aggregate_stats(steps: List[Step]) -> Dict[str, Any]:
 
     - toolsets_used：本轮出现过的工具名（去重，按首次出现排序）；来源是
       tool_call 的 ``function.name`` 与 tool_response 的 ``tool_name``。
-    - tool_stats：按工具名统计 ``total`` / ``success`` / ``failure`` /
-      ``unknown``；``success`` 取 ``tool_success == 1``，``failure`` 取 0，
-      其余（含 ``-1`` 未知）计入 ``unknown``，保证 total == 三项之和。
+    - tool_stats：按工具名统计 ``total`` / ``success`` / ``failure``；
+      ``success`` 取 ``tool_success == 1``，``failure`` 取 0，``-1``（未知）
+      不计入 success/failure，只计入 ``total``，因此 total >= success + failure。
     - tool_error_counts：只保留有失败的工具，值为失败次数。
     - token_usage：累加各 step 的 token 增量；完全没有 token 数据时不产出。
 
@@ -169,15 +169,13 @@ def _aggregate_stats(steps: List[Step]) -> Dict[str, Any]:
         if step.message_type is not MessageType.TOOL_RESPONSE or not step.tool_name:
             continue
         entry = tool_stats.setdefault(
-            step.tool_name, {"total": 0, "success": 0, "failure": 0, "unknown": 0}
+            step.tool_name, {"total": 0, "success": 0, "failure": 0}
         )
         entry["total"] += 1
         if step.tool_success == 1:
             entry["success"] += 1
         elif step.tool_success == 0:
             entry["failure"] += 1
-        else:
-            entry["unknown"] += 1
 
     tool_error_counts = {
         name: entry["failure"] for name, entry in tool_stats.items() if entry["failure"]

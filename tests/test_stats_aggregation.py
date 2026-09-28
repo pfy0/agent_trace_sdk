@@ -42,7 +42,7 @@ class StatsAggregationTest(unittest.TestCase):
         payload = self.memory.traces[0].serializable()
         self.assertEqual(payload["toolsets_used"], ["b", "a"])
 
-    def test_tool_stats_counts_success_failure_unknown(self) -> None:
+    def test_tool_stats_counts_success_failure(self) -> None:
         with self.tracer.turn(turn_id="t", session_id="s") as turn:
             turn.record_user_query("q")
             outcomes = [1, 0, -1, 1]
@@ -57,12 +57,12 @@ class StatsAggregationTest(unittest.TestCase):
         stats = self.memory.traces[0].serializable()["tool_stats"]
         self.assertEqual(
             stats["web_search"],
-            {"total": 4, "success": 2, "failure": 1, "unknown": 1},
+            {"total": 4, "success": 2, "failure": 1},
         )
+        # -1（未知）只计入 total，不落 success/failure
         self.assertEqual(
             stats["web_search"]["total"],
-            stats["web_search"]["success"] + stats["web_search"]["failure"]
-            + stats["web_search"]["unknown"],
+            stats["web_search"]["success"] + stats["web_search"]["failure"] + 1,
         )
 
     def test_tool_error_counts_keeps_only_failures(self) -> None:
