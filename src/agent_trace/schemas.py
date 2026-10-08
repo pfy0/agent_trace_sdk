@@ -193,11 +193,25 @@ class Trace(BaseModel):
     end_time: Optional[str] = Field(default=None, description="回合结束时间 ISO 8601（UTC）")
 
     # 业务标识
-    app_name: Optional[str] = Field(default=None, description="项目 / 产品 / 场景标识")
-    app_id: Optional[str] = None
-    system_code: Optional[str] = Field(default=None, description="触发事件的系统（ALM 系统 S 码）")
-    user_id: Optional[str] = Field(default=None, description="用户 ID（默认工号）")
-    source: Optional[str] = Field(default=None, description="事件来源入口，如接口地址")
+    # 信任模型（见 identity.py）：下面 4 个身份属性应由服务端从可信凭证
+    # （API key / SSO / 网关鉴权）解出并覆盖客户端自报值；source 是请求属性，
+    # 凭证解不出，只能客户端上报或服务端按入口推导。每条 trace 的字段来源会
+    # 写进 metadata.identity_provenance 供审计。
+    app_name: Optional[str] = Field(
+        default=None, description="项目 / 产品 / 场景标识（身份属性，建议服务端凭证解析）"
+    )
+    app_id: Optional[str] = Field(
+        default=None, description="应用 ID（身份属性，建议服务端凭证解析）"
+    )
+    system_code: Optional[str] = Field(
+        default=None, description="触发事件的系统（ALM 系统 S 码；身份属性，建议服务端凭证解析）"
+    )
+    user_id: Optional[str] = Field(
+        default=None, description="用户 ID（默认工号；身份属性，应由服务端鉴权解析，不信客户端自报）"
+    )
+    source: Optional[str] = Field(
+        default=None, description="事件来源入口，如接口地址（请求属性，凭证解不出，由客户端上报或服务端推导）"
+    )
 
     # 智能体身份（agent_id 来自公司内部智能体注册市场）
     agent_id: Optional[str] = Field(default=None, description="执行此步骤的智能体唯一 ID")

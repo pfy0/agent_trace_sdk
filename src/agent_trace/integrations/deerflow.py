@@ -24,6 +24,7 @@ from __future__ import annotations
 import json
 from typing import Any, Dict, List, Optional
 
+from ..identity import RESOLVABLE_FIELDS
 from ..schemas import MessageType
 from ..schemas import ToolCall as TraceToolCall
 from ..tracer import Tracer, Turn
@@ -314,6 +315,26 @@ class AgentTraceMiddleware(_AgentMiddleware):
         context = getattr(runtime, "context", None) or {}
         return context if isinstance(context, dict) else {}
 
+    @staticmethod
+    def _trusted_identity_from_context(context: Dict[str, Any]) -> Dict[str, Any]:
+        """从运行时 context 取「可信身份」字段（服务端鉴权解出的）。
+
+        约定：调用方把身份放在 context 顶层同名键（user_id / app_id /
+        app_name / system_code），或放在 `trusted_identity` 子字典里。两者可
+        同时用，子字典优先。未提供的字段不注入，交给下层回退。
+        """
+        identity: Dict[str, Any] = {}
+        nested = context.get("trusted_identity")
+        if isinstance(nested, dict):
+            identity.update({k: v for k, v in nested.items() if k in RESOLVABLE_FIELDS})
+        for name in RESOLVABLE_FIELDS:
+            if name == "source":
+                # source 是请求属性，不走可信层；由 tracer config / 显式传入决定
+                continue
+            if name not in identity and context.get(name) is not None:
+                identity[name] = context.get(name)
+        return identity
+
     def _run_key(self, runtime: Any) -> Optional[str]:
         context = self._runtime_context(runtime)
         return context.get("run_id") or context.get("thread_id")
@@ -364,10 +385,12 @@ class AgentTraceMiddleware(_AgentMiddleware):
         # turn_no = 该会话内的第几轮；中间件按 session 自增计数（澄清续跑不占用新轮次）
         session_key = str(session_id)
         self._turn_no_by_session[session_key] = self._turn_no_by_session.get(session_key, 0) + 1
+        trusted_identity = self._trusted_identity_from_context(context)
         turn = self.tracer.turn(
             turn_id=str(run_id),
             session_id=session_key,
             turn_no=self._turn_no_by_session[session_key],
+            **({"trusted_identity": trusted_identity} if trusted_identity else {}),
         )
         turn.__enter__()  # 手动进入，生命周期由中间件控制（after_agent 提交）
         entry: Dict[str, Any] = {

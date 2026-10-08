@@ -1,7 +1,7 @@
 # 接入方式总览与示例
 
-> 最后更新：2026-09-28
-> 对应版本：agent-trace-sdk v0.5.2
+> 最后更新：2026-10-08
+> 对应版本：agent-trace-sdk v0.6.0
 > 参考：阿里云 AgentLoop《选择 AI Agent 接入方式》
 > https://help.aliyun.com/zh/agentloop/select-the-ai-agent-integration-method
 > 与《接入 LangChain & LangGraph 应用》

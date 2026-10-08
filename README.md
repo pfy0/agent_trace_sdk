@@ -20,17 +20,34 @@ Agent 运行轨迹采集 SDK。业务方以**最小改动**接入后，SDK 自�
 **业务方（从 GitHub 私有仓库安装）**：
 
 ```bash
-pip install "git+https://github.com/pfy0/agent_trace_sdk.git@v0.5.2"
+pip install "git+https://github.com/pfy0/agent_trace_sdk.git@v0.6.0"
 ```
 
 - 需要：机器能访问 GitHub、装了 `git`、对仓库有读权限。
 - 私有仓库还需带上凭证（SSH key 或 Token）：
-  `pip install "git+ssh://git@github.com/pfy0/agent_trace_sdk.git@v0.5.2"`
+  `pip install "git+ssh://git@github.com/pfy0/agent_trace_sdk.git@v0.6.0"`
 - 装可选依赖（Excel 导出等）：
-  `pip install "agent-trace-sdk[all] @ git+https://github.com/pfy0/agent_trace_sdk.git@v0.5.2"`
+  `pip install "agent-trace-sdk[all] @ git+https://github.com/pfy0/agent_trace_sdk.git@v0.6.0"`
 
 固定 tag 安装，版本可复现。完整说明（Token 配置、升级、离线 wheel、
 DeerFlow/uv 安装）见 `docs/distribute.md`。
+
+### v0.6.0 变更提示（可信身份：身份属性只信服务端鉴权）
+
+**新增能力**：
+
+- **可信身份解析**（`agent_trace.identity`）。`user_id` / `app_id` / `app_name` /
+  `system_code` 属于「身份属性」，多用户共用 agent 时不能靠环境变量或客户端自报；
+  按 `trusted > explicit > reported > default` 解析，`trusted` 层由服务端凭证解出。
+- **`Tracer.turn(trusted_identity={...})`** 按轮注入可信身份，优先级高于客户端自报值
+  与 config 默认值。`source` 是请求属性，不采纳 trusted 层。
+- **`Tracer(user_resolver=...)`** 钩子：在请求入口按当前请求自动解析可信身份；
+  钩子抛异常不影响采集（`debug=True` 时上抛）。
+- **provenance 审计**：默认把每个字段的 `{value, origin, trusted}` 写进
+  `metadata.identity_provenance`，「有值但不可信」的身份字段另写
+  `metadata.untrusted_identity_fields`；`record_identity_provenance=False` 可关闭。
+- **DeerFlow 中间件**从 `runtime.context` 读取可信身份（顶层同名键或
+  `trusted_identity` 子字典，子字典优先）。
 
 ### v0.5.2 变更提示（tool_stats 去掉 unknown 列）
 
@@ -283,7 +300,8 @@ Trace 字段（与公司《轨迹数据规范》对齐）：
 - 标识与时间：`turn_id`、`turn_no`（会话内第几轮）、`session_id`、
   `start_time` / `end_time`（ISO 8601 UTC）、`id` / `create_time`（入库侧生成，SDK 留空）。
 - 业务标识：`app_name`、`app_id`、`system_code`、`user_id`、`source`、
-  `agent_id`、`parent_agent_id`。
+  `agent_id`、`parent_agent_id`。其中前四个是**身份属性**、`source` 是**请求属性**，
+  信任模型见下文「可信身份」。
 - 会话内容：`conversations_type`（缺省 `openai_messages`）与 `conversations`
   （该轮全部 step 的数组）。
 - 结束状态：`completed` / `partial`。
@@ -424,6 +442,7 @@ src/agent_trace/
 ├── tracer.py        # 采集层：Tracer / Turn / 手动埋点 / 装饰器
 ├── context.py       # contextvars 上下文传播
 ├── config.py        # 配置：环境变量 + 代码初始化
+├── identity.py      # 可信身份解析：凭证 > 显式 > 上报 > 默认
 ├── redact.py        # 脱敏：可配规则擦除凭据 / 个人标识
 ├── integrations/    # 框架适配（deerflow.py）
 ├── transport/       # HTTP 上报：队列 / 重试 / 失败落盘
@@ -439,6 +458,7 @@ schema/              # 语言无关的 JSON Schema 契约
 python examples/manual_api.py    # 手动埋点最小闭环 + 三种导出
 python examples/decorator.py     # 装饰器与异常路径
 python examples/deerflow_integration.py  # DeerFlow 中间件集成
+python examples/trusted_identity.py      # 可信身份注入（多用户共用 agent）
 ```
 
 ## 环境变量
@@ -457,6 +477,76 @@ python examples/deerflow_integration.py  # DeerFlow 中间件集成
 | `AGENT_TRACE_REDACT` | 脱敏总开关 | `true` |
 | `AGENT_TRACE_REDACT_CONTENT` | 脱敏 `step.content` | `true` |
 | `AGENT_TRACE_REDACT_ARGUMENTS` | 脱敏 `tool_calls.arguments` | `true` |
+
+> 注意：环境变量里的 `user_id` / `app_id` / `app_name` / `system_code` 属于
+> **不可信默认值**，会被服务端可信身份覆盖（见「可信身份」）。它只适合单机 /
+> 单用户场景，不适合「一个 agent 多人用」。
+
+## 可信身份（user_id / app_id / app_name / system_code）
+
+一个 agent 常被多人共用，因此 `user_id` 这类业务标识**不能**只靠环境变量或
+客户端自报——那是「谁调用的进程 / 谁填的字段」，不是「真正在用的人」。SDK 把
+业务标识分成两类，并按「信任优先级」解析：
+
+| 字段 | 类型 | 凭证能否解析 | 建议来源 |
+| :--- | :--- | :--- | :--- |
+| `user_id` | 身份属性 | ✅ | 服务端鉴权（工号） |
+| `app_id` / `app_name` | 身份属性 | ✅ | 服务端凭证 / 应用注册 |
+| `system_code` | 身份属性 | ✅ | 服务端凭证（S 码） |
+| `source` | 请求属性 | ❌ | 客户端上报 / 服务端按入口推导 |
+
+**解析优先级**（越靠前越可信，`identity.resolve_identity`）：
+
+    1. trusted   —— 服务端鉴权 / 网关注入 / 已解出的凭证（可信）
+    2. explicit  —— 代码里显式传入（如 tracer.turn(user_id=...)）
+    3. reported  —— 客户端 / 前端上报的原始值（不可信，兜底）
+    4. default   —— 环境变量 / Tracer 级默认值
+
+`source` 不走 trusted 层——凭证解不出它，所以 trusted 里给的 `source` 会被忽略。
+
+### 用法一：按轮注入可信身份（推荐）
+
+```python
+# 服务端在请求入口用凭证解出身份，再传给 turn
+with tracer.turn(
+    turn_id=tid, session_id=sid,
+    trusted_identity={"user_id": "26037050", "app_id": "App_X", "system_code": "IDM"},
+) as turn:
+    ...
+```
+
+### 用法二：用 user_resolver 钩子自动解析
+
+适合 Web / 服务：在请求入口 set 一个 contextvar 或从当前请求取用户，turn 创建时
+自动解析，无需每处传参。
+
+```python
+tracer = Tracer(
+    agent_id="agent-1",
+    user_resolver=lambda: {"user_id": current_request_user()},
+)
+```
+
+钩子抛异常不影响采集（会静默回落）；`debug=True` 时向上抛。
+
+### 审计：每个字段来自哪一层
+
+默认每条 trace 会写 `metadata.identity_provenance`，记录每个字段的
+`origin`（trusted / explicit / reported / default）与 `trusted` 布尔值；若身份属性
+有值但不可信，另写 `metadata.untrusted_identity_fields`。服务端据此判断
+「这条 trace 的身份到底可不可信」。`tracer.turn(..., record_identity_provenance=False)`
+可关闭。
+
+### DeerFlow 集成
+
+中间件会从 `runtime.context` 读可信身份并注入——顶层同名键
+（`user_id` / `app_id` / `app_name` / `system_code`）或 `trusted_identity` 子字典
+（子字典优先）。`source` 不从 context 注入，仍由 config / 显式传入决定。
+
+```python
+# 调用 LangGraph 时把身份放进 configurable/context
+graph.invoke(inputs, config={"configurable": {"thread_id": sid, "user_id": "26037050"}})
+```
 
 ## 脱敏
 

@@ -1,8 +1,8 @@
 # Agent 运行轨迹采集 SDK — 现状与待办
 
-> 状态：与代码对齐（v0.5.2；v0.4.0 为契约破坏性变更：Step 去字段 + 契约收紧）
+> 状态：与代码对齐（v0.6.0；v0.4.0 为契约破坏性变更：Step 去字段 + 契约收紧）
 > 范围：Python 优先（`requires-python >= 3.9`）
-> 最后更新：2026-09-28
+> 最后更新：2026-10-08
 >
 > 本文取代此前的《实施计划 v0.3》草案。草案里 `trace_id`、`data/`、`output/`、
 > `extract_steps.py`、`sanitize.py`、`exporters/otlp.py`、`integrations/openai.py`、
@@ -185,6 +185,10 @@ step 5  tool_response   span=span_C   parent=span_A
 | `AGENT_TRACE_REDACT` | `redact`（脱敏总开关） | `true` |
 | `AGENT_TRACE_REDACT_CONTENT` | `redact_content`（脱敏 `step.content`） | `true` |
 | `AGENT_TRACE_REDACT_ARGUMENTS` | `redact_arguments`（脱敏 `tool_calls.arguments`） | `true` |
+
+> 身份属性 `user_id` / `app_id` / `app_name` / `system_code` 由 `identity.py`
+> 按「trusted > explicit > reported > default」解析，环境变量只是**不可信默认值**，
+> 会被服务端可信身份覆盖。详见 README「可信身份」一节。
 
 另有 `default_completed=True`、`default_partial=False`、`exporters=None`。
 

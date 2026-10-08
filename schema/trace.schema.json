@@ -326,7 +326,7 @@
         }
       ],
       "default": null,
-      "description": "项目 / 产品 / 场景标识",
+      "description": "项目 / 产品 / 场景标识（身份属性，建议服务端凭证解析）",
       "title": "App Name"
     },
     "app_id": {
@@ -339,6 +339,7 @@
         }
       ],
       "default": null,
+      "description": "应用 ID（身份属性，建议服务端凭证解析）",
       "title": "App Id"
     },
     "system_code": {
@@ -351,7 +352,7 @@
         }
       ],
       "default": null,
-      "description": "触发事件的系统（ALM 系统 S 码）",
+      "description": "触发事件的系统（ALM 系统 S 码；身份属性，建议服务端凭证解析）",
       "title": "System Code"
     },
     "user_id": {
@@ -364,7 +365,7 @@
         }
       ],
       "default": null,
-      "description": "用户 ID（默认工号）",
+      "description": "用户 ID（默认工号；身份属性，应由服务端鉴权解析，不信客户端自报）",
       "title": "User Id"
     },
     "source": {
@@ -377,7 +378,7 @@
         }
       ],
       "default": null,
-      "description": "事件来源入口，如接口地址",
+      "description": "事件来源入口，如接口地址（请求属性，凭证解不出，由客户端上报或服务端推导）",
       "title": "Source"
     },
     "agent_id": {

@@ -26,6 +26,17 @@ from .exporters import (
     MemoryExporter,
     XlsxExporter,
 )
+from .identity import (
+    IDENTITY_FIELDS,
+    REQUEST_FIELDS,
+    RESOLVABLE_FIELDS,
+    ResolvedField,
+    ResolvedIdentity,
+    field_label,
+    is_identity_field,
+    is_trusted_field,
+    resolve_identity,
+)
 from .redact import EntropyRule, RedactionRule, Redactor, default_rules, is_sensitive_key
 from .schemas import (
     MESSAGE_TYPE_META,
@@ -41,7 +52,7 @@ from .schemas import (
 from .tracer import Tracer, Turn
 from .transport import TransportError
 
-__version__ = "0.5.2"
+__version__ = "0.6.0"
 
 __all__ = [
     "__version__",
@@ -66,6 +77,15 @@ __all__ = [
     "EntropyRule",
     "default_rules",
     "is_sensitive_key",
+    "IDENTITY_FIELDS",
+    "REQUEST_FIELDS",
+    "RESOLVABLE_FIELDS",
+    "ResolvedField",
+    "ResolvedIdentity",
+    "resolve_identity",
+    "is_identity_field",
+    "is_trusted_field",
+    "field_label",
     "get_current_turn",
     "generate_id",
     "generate_message_id",

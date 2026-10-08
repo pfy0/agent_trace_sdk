@@ -30,6 +30,11 @@ from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Unio
 
 from . import context as ctx
 from .config import Config
+from .identity import (
+    IDENTITY_FIELDS,
+    RESOLVABLE_FIELDS,
+    resolve_identity,
+)
 from .redact import Redactor
 from .schemas import (
     MESSAGE_TYPE_META,
@@ -219,6 +224,8 @@ class Turn:
         completed: Optional[bool] = None,
         partial: bool = False,
         metadata: Optional[Dict[str, Any]] = None,
+        trusted_identity: Optional[Dict[str, Any]] = None,
+        record_identity_provenance: bool = True,
         **extra: Any,
     ) -> None:
         # extra 只接受 Trace 已有的字段名（用于按轮覆盖 user_id / source 等）；
@@ -235,6 +242,19 @@ class Turn:
         self.turn_no = turn_no
         self.metadata = dict(metadata or {})
         self.extra = dict(extra)
+        self.record_identity_provenance = bool(record_identity_provenance)
+        # 按信任优先级解析业务字段：可信（凭证）> 显式传入 > 上报 > 默认。
+        # extra 里同名字段（业务方显式传入）作为 explicit 层参与解析后会被覆盖，
+        # 因此随后从 self.extra 里剔除，避免重复。
+        self.identity = resolve_identity(
+            trusted=trusted_identity,
+            explicit={name: extra.get(name) for name in RESOLVABLE_FIELDS},
+            default={
+                name: getattr(tracer.config, name, None) for name in RESOLVABLE_FIELDS
+            },
+        )
+        for name in RESOLVABLE_FIELDS:
+            self.extra.pop(name, None)
 
         self.completed = tracer.config.default_completed if completed is None else bool(completed)
         self.partial = bool(partial)
@@ -433,6 +453,8 @@ class Turn:
     def as_trace(self) -> Trace:
         """把当前采集结果组装成已校验的 Trace。"""
         ended = utc_now()
+        metadata = dict(self.metadata)
+        self._append_identity_provenance(metadata)
         payload: Dict[str, Any] = {
             "turn_id": self.turn_id,
             "session_id": self.session_id,
@@ -448,12 +470,33 @@ class Turn:
             "end_time": iso_timestamp(ended),
             "completed": self.completed,
             "partial": self.partial,
-            "metadata": self.metadata or None,
+            "metadata": metadata or None,
             "conversations": [step.model_dump(mode="python") for step in self._steps],
         }
+        # 可信解析结果覆盖 config 默认值（含 source）
+        payload.update(self.identity.values)
         payload.update(_aggregate_stats(self._steps))
         payload.update(self.extra)
         return Trace.model_validate(payload)
+
+    def _append_identity_provenance(self, metadata: Dict[str, Any]) -> None:
+        """把每个业务字段的来源/是否可信写进 metadata，供服务端审计。
+
+        未启用（record_identity_provenance=False）或已有同名键时不覆盖，
+        避免与业务方自填的 metadata 冲突。
+        """
+        if not self.record_identity_provenance:
+            return
+        provenance = self.identity.provenance()
+        if not provenance:
+            return
+        existing = metadata.get("identity_provenance")
+        if isinstance(existing, dict) and existing:
+            return
+        metadata["identity_provenance"] = provenance
+        untrusted = self.identity.untrusted_fields(IDENTITY_FIELDS)
+        if untrusted:
+            metadata["untrusted_identity_fields"] = untrusted
 
     def commit(self) -> Optional[Trace]:
         """组装、校验并交给导出层。幂等，重复调用只提交一次。
@@ -549,6 +592,8 @@ class Tracer:
         source: Optional[str] = None,
         exporters: Optional[Iterable[Any]] = None,
         config: Optional[Config] = None,
+        trusted_identity: Optional[Dict[str, Any]] = None,
+        user_resolver: Optional[Callable[[], Optional[Dict[str, Any]]]] = None,
         **config_overrides: Any,
     ) -> None:
         if config is None:
@@ -569,6 +614,12 @@ class Tracer:
                 overrides["source"] = source
             config = Config.from_env(**overrides)
         self.config = config
+        # Tracer 级可信身份（如服务进程启动时已解出的凭证身份）。可被 per-turn
+        # 的 trusted_identity 覆盖；优先级见 identity.resolve_identity。
+        self.trusted_identity: Dict[str, Any] = dict(trusted_identity or {})
+        # per-turn 解析钩子：返回可信身份字段的字典。适合 web 服务在请求入口
+        # set 一个 contextvar / 从当前请求取用户，turn() 创建时自动解析。
+        self._user_resolver = user_resolver
         self._exporters: List[Any] = list(exporters or config.exporters or [])
         self._redactor = self._build_redactor(config)
 
@@ -617,6 +668,37 @@ class Tracer:
 
     # ---------- turn 入口 ----------
 
+    def _trusted_layer(self) -> Dict[str, Any]:
+        """汇总「可信来源」的值：Tracer 级 trusted_identity + user_resolver 返回。"""
+        trusted = {k: v for k, v in self.trusted_identity.items() if v is not None}
+        if self._user_resolver is not None:
+            try:
+                extra = self._user_resolver()
+            except Exception:  # pragma: no cover - 业务钩子出错不影响采集
+                if self.config.debug:
+                    raise
+                extra = None
+            if extra:
+                trusted.update({k: v for k, v in extra.items() if v is not None})
+        return trusted
+
+    def resolve_identity(
+        self,
+        reported: Optional[Dict[str, Any]] = None,
+        explicit: Optional[Dict[str, Any]] = None,
+    ):
+        """解析本轮的「可信身份」，供服务端在上报前覆盖客户端自报值。
+
+        合并顺序：Tracer 级 trusted_identity + user_resolver 返回值作为可信层，
+        调用方传入的 explicit/reported 作为次优先。返回值是 `ResolvedIdentity`，
+        直接取 `.values` 即可喂给 `turn(...)`。
+        """
+        return resolve_identity(
+            trusted=self._trusted_layer(),
+            explicit=explicit,
+            reported=reported,
+        )
+
     def turn(
         self,
         turn_id: Optional[str] = None,
@@ -627,7 +709,20 @@ class Tracer:
 
         `turn_no` 为该会话内的第几轮（业务方传入，缺省 1）；
         `completed` / `partial` 为结束状态，缺省取 config（true / false）。
+        传入 `trusted_identity={...}` 可注入服务端解出的可信身份；也可通过
+        `user_resolver` 钩子按请求自动解析。
         """
+        # 可信层合并：Tracer 级 + user_resolver 为基底，per-turn 的
+        # trusted_identity 覆盖同名字段（per-turn 更贴近当前请求，优先级更高）。
+        # 只合并「可信来源」的值，绝不把 config 默认值提升成可信层。
+        merged = self._trusted_layer()
+        per_turn = kwargs.get("trusted_identity")
+        if per_turn:
+            merged.update({k: v for k, v in per_turn.items() if v is not None})
+        if merged:
+            kwargs["trusted_identity"] = merged
+        else:
+            kwargs.pop("trusted_identity", None)
         return Turn(
             self,
             turn_id=turn_id or generate_id("turn"),
