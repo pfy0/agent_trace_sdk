@@ -1,0 +1,543 @@
+{
+  "$defs": {
+    "MessageType": {
+      "description": "消息类型枚举，取值与 message_id 缩写、role 的映射见 MESSAGE_TYPE_META。",
+      "enum": [
+        "system_prompt",
+        "user_query",
+        "reasoning",
+        "tool_call",
+        "tool_response",
+        "final_answer"
+      ],
+      "title": "MessageType",
+      "type": "string"
+    },
+    "Role": {
+      "enum": [
+        "system",
+        "user",
+        "assistant",
+        "tool"
+      ],
+      "title": "Role",
+      "type": "string"
+    },
+    "Step": {
+      "additionalProperties": false,
+      "description": "轨迹中的一步 = `conversations` 数组里的一个元素。",
+      "properties": {
+        "message_id": {
+          "description": "格式 msg_{类型缩写}_{序号}",
+          "title": "Message Id",
+          "type": "string"
+        },
+        "step_no": {
+          "anyOf": [
+            {
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "从 1 递增；由 SDK 统一分配",
+          "title": "Step No"
+        },
+        "role": {
+          "$ref": "#/$defs/Role"
+        },
+        "message_type": {
+          "$ref": "#/$defs/MessageType"
+        },
+        "content": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "tool_call 时为 null",
+          "title": "Content"
+        },
+        "start_time": {
+          "description": "开始的 ISO 8601 时间戳（UTC）",
+          "title": "Start Time",
+          "type": "string"
+        },
+        "end_time": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "结束的 ISO 8601 时间戳（UTC）；缺省时等于 start_time",
+          "title": "End Time"
+        },
+        "latency_ms": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Latency Ms"
+        },
+        "span_id": {
+          "description": "跨度 ID，SDK 自动生成",
+          "title": "Span Id",
+          "type": "string"
+        },
+        "parent_span_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "父跨度 ID",
+          "title": "Parent Span Id"
+        },
+        "is_follow_up": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "仅 user_query 有意义；True 表示该轮内的追问/补充",
+          "title": "Is Follow Up"
+        },
+        "tool_calls": {
+          "anyOf": [
+            {
+              "items": {
+                "$ref": "#/$defs/ToolCall"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Tool Calls"
+        },
+        "tool_call_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Tool Call Id"
+        },
+        "tool_name": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "工具名称，由 SDK 自动回填",
+          "title": "Tool Name"
+        },
+        "tool_success": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "工具调用结果：-1 未知 / 0 失败 / 1 成功",
+          "title": "Tool Success"
+        },
+        "prompt_tokens_delta": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Prompt Tokens Delta"
+        },
+        "completion_tokens_delta": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Completion Tokens Delta"
+        }
+      },
+      "required": [
+        "message_id",
+        "role",
+        "message_type"
+      ],
+      "title": "Step",
+      "type": "object"
+    },
+    "ToolCall": {
+      "additionalProperties": false,
+      "description": "单个工具调用对象。字段刻意贴近 OpenAI 的 tool_calls 结构。",
+      "properties": {
+        "id": {
+          "description": "工具调用 ID，用于与 tool_response 关联",
+          "title": "Id",
+          "type": "string"
+        },
+        "type": {
+          "default": "function",
+          "title": "Type",
+          "type": "string"
+        },
+        "function": {
+          "additionalProperties": true,
+          "title": "Function",
+          "type": "object"
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "title": "ToolCall",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "description": "一次 agent 运行 = 一个 turn = 一轮交互，是采集/校验/上报的基本单位。\n\n`turn_id` 由业务方传入，是 trace 的唯一标识（不再单独引入 trace_id）。\n`session_id` 同样由业务方传入，用于关联同一会话的多个 turn。\n\n字段与公司《轨迹数据规范》对齐；`id` / `create_time` 由入库侧生成，\nSDK 只留空位。`start_time` / `end_time` 对应采集的起止时刻。",
+  "properties": {
+    "id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "事件唯一 ID（UUIDV7），入库自动生成",
+      "title": "Id"
+    },
+    "create_time": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "入库时间 ISO 8601（UTC），入库自动生成",
+      "title": "Create Time"
+    },
+    "turn_id": {
+      "description": "回合唯一标识（turn_UUIDV7），业务方传入",
+      "minLength": 1,
+      "title": "Turn Id",
+      "type": "string"
+    },
+    "turn_no": {
+      "default": 1,
+      "description": "该会话内的第几轮交互，从 1 递增，业务方传入",
+      "minimum": 1,
+      "title": "Turn No",
+      "type": "integer"
+    },
+    "session_id": {
+      "description": "会话唯一标识（sess_UUIDV7）",
+      "minLength": 1,
+      "title": "Session Id",
+      "type": "string"
+    },
+    "start_time": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "回合开始时间 ISO 8601（UTC）",
+      "title": "Start Time"
+    },
+    "end_time": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "回合结束时间 ISO 8601（UTC）",
+      "title": "End Time"
+    },
+    "app_name": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "项目 / 产品 / 场景标识（身份属性，建议服务端凭证解析）",
+      "title": "App Name"
+    },
+    "app_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "应用 ID（身份属性，建议服务端凭证解析）",
+      "title": "App Id"
+    },
+    "system_code": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "触发事件的系统（ALM 系统 S 码；身份属性，建议服务端凭证解析）",
+      "title": "System Code"
+    },
+    "user_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "用户 ID（默认工号；身份属性，应由服务端鉴权解析，不信客户端自报）",
+      "title": "User Id"
+    },
+    "source": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "事件来源入口，如接口地址（请求属性，凭证解不出，由客户端上报或服务端推导）",
+      "title": "Source"
+    },
+    "agent_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "执行此步骤的智能体唯一 ID",
+      "title": "Agent Id"
+    },
+    "parent_agent_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "子智能体对应的父智能体 ID",
+      "title": "Parent Agent Id"
+    },
+    "conversations_type": {
+      "default": "openai_messages",
+      "description": "会话格式标识：openai messages / sharegpt / 自定义 等",
+      "title": "Conversations Type",
+      "type": "string"
+    },
+    "conversations": {
+      "description": "该轮的全部步骤",
+      "items": {
+        "$ref": "#/$defs/Step"
+      },
+      "title": "Conversations",
+      "type": "array"
+    },
+    "completed": {
+      "default": true,
+      "description": "该轮是否真正结束",
+      "title": "Completed",
+      "type": "boolean"
+    },
+    "partial": {
+      "default": false,
+      "description": "是否因超时等外部条件被截断",
+      "title": "Partial",
+      "type": "boolean"
+    },
+    "api_calls": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "本回合 API 调用总次数（含重试）",
+      "title": "Api Calls"
+    },
+    "toolsets_used": {
+      "anyOf": [
+        {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "调用的工具集名称列表",
+      "title": "Toolsets Used"
+    },
+    "tool_stats": {
+      "anyOf": [
+        {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "各工具调用统计",
+      "title": "Tool Stats"
+    },
+    "tool_error_counts": {
+      "anyOf": [
+        {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "各工具错误汇总",
+      "title": "Tool Error Counts"
+    },
+    "token_usage": {
+      "anyOf": [
+        {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "token 消耗汇总",
+      "title": "Token Usage"
+    },
+    "metadata": {
+      "anyOf": [
+        {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "扩展元数据（自定义标签、版本等）",
+      "title": "Metadata"
+    },
+    "extra_info": {
+      "anyOf": [
+        {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "扩展业务数据（任意额外字段）",
+      "title": "Extra Info"
+    }
+  },
+  "required": [
+    "turn_id",
+    "session_id"
+  ],
+  "title": "AgentTrace",
+  "type": "object",
+  "$id": "https://github.com/pfy0/agent_trace_sdk/schema/trace.schema.json"
+}
