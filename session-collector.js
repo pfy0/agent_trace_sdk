@@ -75,7 +75,7 @@ class TurnState {
   constructor(session, turnNo, startMs) {
     const options = session.options;
     const turn = new Turn({
-      turn_id: "opencode:" + session.sessionId + ":" + turnNo,
+      turn_id: generateId("turn"),
       session_id: session.sessionId,
       turn_no: turnNo,
       start_time: epochMsToIso(startMs) || nowIso(),

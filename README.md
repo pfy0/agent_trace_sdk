@@ -28,8 +28,24 @@ opencode plugin add github:pfy0/agent_trace_sdk#js-sdk
 }
 ```
 
+想连输出路径一并写进配置（就不用设环境变量了），**用对象形态**（不是两层数组）：
+
+```jsonc
+{
+  "plugins": [
+    {
+      "package": "github:pfy0/agent_trace_sdk#js-sdk",
+      "options": { "output": "C:\\Users\\you\\opencode_traces.json" }
+    }
+  ]
+}
+```
+
 > 配置键是 **`plugins`（复数）**；它支持 npm 包 / git 源 / 本地路径。
 > 旧的 **`plugin`（单数）** 键只接受 npm 包或 git 源。
+> ⚠️ 常见错误：写成 `[["包名", { ... }]]`（数组套数组）会被 OpenCode
+> 判为格式非法、**直接跳过不加载**（日志里会出现
+> `configuration normalization diagnostic ... kind=invalid`）。
 
 ### 3. 本地目录（离线 / 内网）
 
@@ -61,7 +77,7 @@ Windows 永久设置：`setx AGENT_TRACE_OUTPUT "D:\traces\opencode.json"`（重
 ```json
 [
   {
-    "turn_id": "opencode:ses_xxx:1",
+    "turn_id": "turn_01eccf476c68437ea494a7bfc6a7c722",
     "turn_no": 1,
     "session_id": "ses_xxx",
     "app_name": "opencode",
