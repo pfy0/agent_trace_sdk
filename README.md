@@ -463,7 +463,7 @@ AGENT_TRACE_OUTPUT=outputs/opencode_traces.json
 
 要点：
 
-- `turn_id` 自动生成为 `opencode:<sessionID>:<turn_no>`，`session_id` 取 OpenCode 的
+- `turn_id` 按契约生成为 `turn_<32位hex>`（与 Python `generate_id("turn")` 同形）；`session_id` 取 OpenCode 的
   `sessionID`；每条 user 消息 + 其后的 assistant 归为一个 turn。
 - **实时增量**：逐事件落步，不等整轮跑完再重放；**fail-open**：单条脏事件不打断整条流。
 - 工具成败复用统一口径 `agent_trace.tool_outcome`（与 DeerFlow 同一套两层判定）。

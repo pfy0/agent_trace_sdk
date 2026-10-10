@@ -266,7 +266,7 @@ step 5  tool_response   span=span_C   parent=span_A
   `exporters.js`（JSON / JSONL 落盘）。
 - 字段严格对齐 `schema/trace.schema.json`，序列化丢弃空值（对齐 Python
   `serializable()`）；工具成败判定与 Python `tool_outcome.py` 逐条等价。
-- `turn_id = opencode:<sessionID>:<turn_no>`；每条 user 消息 + 其后的 assistant 归为
+- `turn_id = turn_<32位hex>`（与 Python `generate_id("turn")` 同形）；每条 user 消息 + 其后的 assistant 归为
   一个 turn。收尾由 `session.execution.succeeded/failed`（或退出兜底）触发。
 - 跨语言一致性：JS 输出可直接过 Python `Trace.model_validate`（`extra="forbid"`），
   由 `tests/test_opencode_js_sdk.py` 用真实事件 fixture 守护。

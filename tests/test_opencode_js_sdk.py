@@ -6,6 +6,7 @@ Python 的 `Trace.model_validate`（extra="forbid"）严格校验。
 """
 
 import json
+import re
 import shutil
 import subprocess
 import sys
@@ -65,6 +66,18 @@ def test_text_turn_matches_python_contract():
     assert types == ["user_query", "reasoning", "final_answer"]
     assert t.get("tool_stats") is None  # prune 丢空值，键不存在
     assert t["token_usage"]["total_tokens"] > 0
+
+
+def test_turn_and_session_id_shape():
+    """契约形态：turn_id 为 turn_<32位hex>（与 Python generate_id("turn") 同形）；
+    session_id 保留 OpenCode 原生的 ses_xxx（不伪造，与 DeerFlow 取 thread_id 同理）。"""
+    traces = run_js("events_tool.jsonl")
+    t = traces[0]
+    assert re.fullmatch(r"turn_[0-9a-f]{32}", t["turn_id"]), t["turn_id"]
+    assert t["session_id"].startswith("ses_"), t["session_id"]
+    # 跨轮不重叠：每轮一个新 turn_id，但共享同一 session_id
+    for trace in traces:
+        assert re.fullmatch(r"turn_[0-9a-f]{32}", trace["turn_id"])
 
 
 def test_step_fields_exactly_match_schema():

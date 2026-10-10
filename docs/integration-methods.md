@@ -266,7 +266,7 @@ AGENT_TRACE_OUTPUT=outputs/opencode_traces.json
 - **字段严格对齐 schema**：序列化丢弃空值，对齐 Python `serializable()`；工具成败
   复用统一口径（与 DeerFlow 同一套两层判定）。JS 输出可直接过 Python
   `Trace.model_validate`（`extra="forbid"`），由 `tests/test_opencode_js_sdk.py` 守护。
-- `turn_id` 自动生成为 `opencode:<sessionID>:<turn_no>`，`session_id` 取 OpenCode 的
+- `turn_id` 按契约生成为 `turn_<32位hex>`（与 Python `generate_id("turn")` 同形）；`session_id` 取 OpenCode 的
   `sessionID`；每条 user 消息 + 其后的 assistant 归为一个 turn。
 - **非阻塞 / fail-open**：事件旁路泵取，逐事件处理；单条脏事件不打断整条流。
 - 契约语言无关：schema 是唯一真源，Python 侧的 `schema/trace.schema.json` 可直接校验
