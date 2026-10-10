@@ -1,0 +1,35 @@
+{
+  "name": "agent-trace-opencode",
+  "version": "0.7.0",
+  "description": "Agent Trace 的 OpenCode 采集插件：订阅 OpenCode 事件流，进程内归一成契约 Trace，直接写本地 JSON",
+  "type": "module",
+  "license": "MIT",
+  "main": "./index.js",
+  "exports": {
+    ".": "./index.js",
+    "./server": "./index.js",
+    "./collector": "./session-collector.js",
+    "./builder": "./trace-builder.js",
+    "./exporters": "./exporters.js"
+  },
+  "files": [
+    "index.js",
+    "agent-trace.js",
+    "session-collector.js",
+    "trace-builder.js",
+    "exporters.js",
+    "schema",
+    "README.md"
+  ],
+  "keywords": [
+    "opencode",
+    "opencode-plugin",
+    "agent",
+    "trace",
+    "observability",
+    "llm"
+  ],
+  "engines": {
+    "node": ">=18"
+  }
+}

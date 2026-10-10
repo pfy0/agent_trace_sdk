@@ -21,12 +21,12 @@
 """
 from __future__ import annotations
 
-import json
 from typing import Any, Dict, List, Optional
 
 from ..identity import RESOLVABLE_FIELDS
 from ..schemas import MessageType
 from ..schemas import ToolCall as TraceToolCall
+from .. import tool_outcome as _tool_outcome
 from ..tracer import Tracer, Turn
 
 try:  # pragma: no cover - 依赖宿主环境
@@ -166,102 +166,28 @@ def _injected_label(message: Any) -> Optional[str]:
     return None
 
 
-#: 工具返回体里表示成败的顶层布尔键。业务工具常直接返回
-#: ``{"success": true/false}`` / ``{"ok": true/false}`` 这类结构化结果。
-#:
-#: **只看顶层键**：嵌套在 ``data`` 里的 ``ok`` 说的是业务子状态（如
-#: ``status: draft``），不能代表这次工具调用本身的成败。
-_JSON_VERDICT_KEYS = ("success", "ok", "is_success", "succeeded")
+# 工具成败判定的单一事实来源在 `agent_trace.tool_outcome`：DeerFlow 与
+# OpenCode 等集成共用同一套口径，避免各集成各判一套导致下游统计不一致。
+# 下面这几个私有别名保留，既兼容既有调用/测试，也方便单文件阅读。
+_JSON_VERDICT_KEYS = _tool_outcome.JSON_VERDICT_KEYS
+_TRUE_STRINGS = _tool_outcome.TRUE_STRINGS
+_FALSE_STRINGS = _tool_outcome.FALSE_STRINGS
+_ERROR_PREFIXES = _tool_outcome.ERROR_PREFIXES
 
-_TRUE_STRINGS = frozenset({"true", "1", "yes"})
-_FALSE_STRINGS = frozenset({"false", "0", "no"})
-
-#: 第二层用：文本以 ``Error`` 开头即视为失败。DeerFlow 各工具失败时统一
-#: ``return f"Error: {e}"``（全仓 20+ 处一致），业务工具也沿用这个写法。
-#: 只认「Error + 分隔符」开头，避免把 ``errors are common`` 这类正常输出误判。
-_ERROR_PREFIXES = ("error:", "error -", "error —")
-
-
-def _parse_json_object(text: str) -> Optional[Dict[str, Any]]:
-    """把文本解析成 JSON 对象；不是对象则返回 None。
-
-    沙箱可能在 JSON 之后追加诊断文本，此时退一步只取首个 JSON 对象。
-    """
-    if not text:
-        return None
-    stripped = text.strip()
-    if not stripped.startswith("{"):
-        return None
-    try:
-        payload = json.loads(stripped)
-    except (TypeError, ValueError):
-        end = stripped.rfind("}")
-        if end <= 0:
-            return None
-        try:
-            payload = json.loads(stripped[: end + 1])
-        except (TypeError, ValueError):
-            return None
-    return payload if isinstance(payload, dict) else None
-
-
-def _json_verdict(payload: Optional[Dict[str, Any]]) -> Optional[int]:
-    """第一层：从 JSON 对象顶层取**显式**成败布尔值，返回 1 / 0 / None。
-
-    只认真正的布尔值（或 ``"true"`` / ``"false"`` 这类字符串写法）；
-    没有这些键时返回 None，交由第二层判定。
-    """
-    if not isinstance(payload, dict):
-        return None
-    for key in _JSON_VERDICT_KEYS:
-        if key not in payload:
-            continue
-        value = payload[key]
-        if isinstance(value, bool):
-            return 1 if value else 0
-        if isinstance(value, str):
-            lowered = value.strip().lower()
-            if lowered in _TRUE_STRINGS:
-                return 1
-            if lowered in _FALSE_STRINGS:
-                return 0
-    return None
-
-
-def _looks_like_error_text(text: str) -> bool:
-    """文本是否以 ``Error`` 开头（DeerFlow / 业务工具的失败约定）。"""
-    if not text:
-        return False
-    lowered = text.lstrip().lower()
-    return any(lowered.startswith(prefix) for prefix in _ERROR_PREFIXES)
+_parse_json_object = _tool_outcome.parse_json_object
+_json_verdict = _tool_outcome.json_verdict
+_looks_like_error_text = _tool_outcome.looks_like_error_text
 
 
 def _tool_success(message: Any, text: str) -> int:
     """判定一次工具调用是否成功，返回 -1（未知）/ 0（失败）/ 1（成功）。
 
-    两层判定：
-
-    1. **显式成败**：返回体 JSON 顶层带 ``success`` / ``ok`` 等布尔值 -> 按它判定；
-    2. **兜底**：
-       - 文本以 ``Error`` 开头（工具的失败约定）-> ``0``；
-       - 能解析为 JSON 对象、只是没带成败键（结构化结果本身就说明调用跑通了，
-         如搜索结果 ``{"query": ..., "results": [...]}``）-> ``1``；
-       - 其余 -> ``-1``（未知），**不猜**。
-
-    不采信框架的 ``status``：LangChain 无论成败都显式置 ``"success"``，
-    采信它会把失败记成成功。
-
-    ``message`` 形参保留是为了兼容既有调用与后续可能的判定依据。
+    判定逻辑已收敛到 `agent_trace.tool_outcome.judge_tool_success`（两层：
+    JSON 顶层显式成败 > ``Error`` 文本 / 可解析对象兜底 > 未知）。此处保留
+    ``message`` 形参是为了兼容既有调用与后续可能的判定依据——**刻意不采信**
+    框架的 ``status``（LangChain 无论成败都显式置 ``"success"``）。
     """
-    payload = _parse_json_object(text)
-    verdict = _json_verdict(payload)
-    if verdict is not None:
-        return verdict
-    if _looks_like_error_text(text):
-        return 0
-    if payload is not None:
-        return 1
-    return -1
+    return _tool_outcome.judge_tool_success(text)
 
 
 def _message_key(message: Any) -> str:

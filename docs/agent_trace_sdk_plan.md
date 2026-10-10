@@ -1,6 +1,6 @@
 # Agent 运行轨迹采集 SDK — 现状与待办
 
-> 状态：与代码对齐（v0.6.0；v0.4.0 为契约破坏性变更：Step 去字段 + 契约收紧）
+> 状态：与代码对齐（v0.7.0；v0.4.0 为契约破坏性变更：Step 去字段 + 契约收紧）
 > 范围：Python 优先（`requires-python >= 3.9`）
 > 最后更新：2026-10-08
 >
@@ -38,6 +38,7 @@ src/agent_trace/
 ├── redact.py         # 脱敏：可配规则擦除凭据 / 个人标识
 ├── integrations/
 │   └── deerflow.py   # DeerFlow / LangGraph 中间件（自动采集轨迹）
+├── tool_outcome.py   # 工具成败判定的单一事实来源（各集成共用）
 ├── transport/        # HTTP 上报：非阻塞队列 / 重试 / 失败落盘补发
 │   ├── client.py     # HttpTransport、UrllibPoster、HttpxPoster、TransportError
 │   ├── queue.py      # BatchQueue：非阻塞入队 + 后台 flush + spool 自动补发
@@ -248,6 +249,34 @@ step 5  tool_response   span=span_C   parent=span_A
   用户放弃澄清直接
   重新提问时，暂存的澄清轮会兜底提交，数据不丢。
 - 无 `langchain` 时中间件退化为普通类，仍可 import 做纯逻辑单测。
+### 2.8.1 OpenCode 集成 `integrations/opencode/`（JS SDK，进程内归一）
+
+- 设计取向：OpenCode 运行时是 Node/Bun，插件只能用 JS/TS 写，Python SDK 进不去
+  那个进程。因此 OpenCode 侧提供**一个 JS SDK**（`integrations/opencode/`）：插件
+  订阅 OpenCode 事件流，**进程内**按契约归一，像 DeerFlow 的 `config.output` 一样
+  直接写本地 JSON——不需要接收端，也不依赖 SQLite 库表。
+- 为什么订阅事件而非读库：旧方案读 `~/.local/share/opencode/opencode.db` 再上报
+  服务端归一。实测 opencode 2.0.26 发现官方事件通道可用
+  （`session.reasoning.*` / `session.text.*` / `session.tool.*` / `session.step.ended`
+  / `session.execution.*`），改为订阅事件流：实时增量、不依赖库表、无需接收端。
+- 文件：`index.js`（目录入口，OpenCode 自动加载）、
+    `agent-trace.js`（`ctx.event.subscribe()` 泵取事件流）、
+  `session-collector.js`（事件 → 轮次/步）、`trace-builder.js`（契约层：
+  Step/Trace 构造、message_id/span 生成、`tool_success` 判定）、
+  `exporters.js`（JSON / JSONL 落盘）。
+- 字段严格对齐 `schema/trace.schema.json`，序列化丢弃空值（对齐 Python
+  `serializable()`）；工具成败判定与 Python `tool_outcome.py` 逐条等价。
+- `turn_id = opencode:<sessionID>:<turn_no>`；每条 user 消息 + 其后的 assistant 归为
+  一个 turn。收尾由 `session.execution.succeeded/failed`（或退出兜底）触发。
+- 跨语言一致性：JS 输出可直接过 Python `Trace.model_validate`（`extra="forbid"`），
+  由 `tests/test_opencode_js_sdk.py` 用真实事件 fixture 守护。
+- 发布：以独立 npm 包形式放在 **`js-sdk` 分支**（包根即包本身，`exports["./server"]` 指向
+  `index.js`），仓库内 `integrations/opencode/` 是同步的开发副本。
+- 安装：一条命令 `opencode plugin add github:pfy0/agent_trace_sdk#js-sdk`
+  （自动装到 `~/.cache/opencode/node_modules/` 并写入全局配置）；也可把
+  `integrations/opencode/` 整体拷成 `~/.config/opencode/plugins/oc-plugin/`（靠子目录
+  `index.js` 自动加载，无需改 `opencode.json`）。环境变量（`AGENT_TRACE_OUTPUT` 等）
+  见 `integrations/opencode/README.md`。
 
 ### 2.9 工具与示例
 
@@ -255,7 +284,8 @@ step 5  tool_response   span=span_C   parent=span_A
 - `tools/export_schema.py`：从 pydantic 模型导出 `schema/trace.schema.json` 与
   `schema/enums.json`。
 - `examples/`：`manual_api.py`（最小闭环 + 三种导出）、`decorator.py`（装饰器与
-  异常路径）、`deerflow_integration.py`（DeerFlow 中间件）。
+  异常路径）、`deerflow_integration.py`（DeerFlow 中间件）、
+  `trusted_identity.py`（可信身份注入）。OpenCode 侧改用 JS SDK（`integrations/opencode/`）。
 
 ### 2.11 发布
 

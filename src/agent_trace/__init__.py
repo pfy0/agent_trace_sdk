@@ -49,10 +49,11 @@ from .schemas import (
     generate_message_id,
     iso_timestamp,
 )
+from .tool_outcome import judge_tool_success
 from .tracer import Tracer, Turn
 from .transport import TransportError
 
-__version__ = "0.6.0"
+__version__ = "0.7.0"
 
 __all__ = [
     "__version__",
@@ -87,6 +88,7 @@ __all__ = [
     "is_trusted_field",
     "field_label",
     "get_current_turn",
+    "judge_tool_success",
     "generate_id",
     "generate_message_id",
     "iso_timestamp",

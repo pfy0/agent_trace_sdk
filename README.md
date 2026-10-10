@@ -20,17 +20,31 @@ Agent 运行轨迹采集 SDK。业务方以**最小改动**接入后，SDK 自�
 **业务方（从 GitHub 私有仓库安装）**：
 
 ```bash
-pip install "git+https://github.com/pfy0/agent_trace_sdk.git@v0.6.0"
+pip install "git+https://github.com/pfy0/agent_trace_sdk.git@v0.7.0"
 ```
 
 - 需要：机器能访问 GitHub、装了 `git`、对仓库有读权限。
 - 私有仓库还需带上凭证（SSH key 或 Token）：
-  `pip install "git+ssh://git@github.com/pfy0/agent_trace_sdk.git@v0.6.0"`
+  `pip install "git+ssh://git@github.com/pfy0/agent_trace_sdk.git@v0.7.0"`
 - 装可选依赖（Excel 导出等）：
-  `pip install "agent-trace-sdk[all] @ git+https://github.com/pfy0/agent_trace_sdk.git@v0.6.0"`
+  `pip install "agent-trace-sdk[all] @ git+https://github.com/pfy0/agent_trace_sdk.git@v0.7.0"`
 
 固定 tag 安装，版本可复现。完整说明（Token 配置、升级、离线 wheel、
 DeerFlow/uv 安装）见 `docs/distribute.md`。
+
+### v0.7.0 变更提示（新增 OpenCode 集成；工具成败判定收敛为单一事实来源）
+
+**新增能力**：
+
+- **OpenCode 集成（JS SDK）**：一个插件订阅 OpenCode 事件流，**进程内**
+  归一成契约 `Trace` / `Step`，直接写本地 JSON（不需接收端、不读 SQLite）。
+  安装：`opencode plugin add github:pfy0/agent_trace_sdk#js-sdk`。详见「框架集成：OpenCode」。
+
+**内部重构（行为不变）**：
+
+- **工具成败判定收敛到单一事实来源** `src/agent_trace/tool_outcome.py`
+  （`judge_tool_success`），DeerFlow 与 OpenCode 共用同一套两层口径，避免各集成
+  各判一套导致下游 `tool_stats` 不一致。判定结果与 v0.5.1 起的口径逐条等价。
 
 ### v0.6.0 变更提示（可信身份：身份属性只信服务端鉴权）
 
@@ -146,8 +160,9 @@ DeerFlow/uv 安装）见 `docs/distribute.md`。
   命令」误判为失败），也去掉 `No such file or directory` / `Permission denied` /
   `command not found` / `Traceback` 等可能出现在合法输出里的弱特征。
 
-仅影响 DeerFlow 集成（`integrations/deerflow.py`）内的判定，Step 契约未变。
-详见下方「DeerFlow 集成」的 `tool_success` 判定。
+仅影响工具成败判定（现已收敛到单一事实来源 `src/agent_trace/tool_outcome.py`，
+DeerFlow 与 OpenCode 集成共用），Step 契约未变。详见下方框架集成的
+`tool_success` 判定。
 
 ### v0.4.0 升级提示（不向后兼容，Step 去字段 + 契约收紧）
 
@@ -410,15 +425,59 @@ from agent_trace.integrations.deerflow import AgentTraceMiddleware
 agent = create_agent(model=..., tools=[...], middleware=[AgentTraceMiddleware(tracer)])
 ```
 
+## 框架集成：OpenCode（JS SDK，直接出 JSON）
+
+OpenCode 运行时是 Node/Bun，插件只能用 JS/TS 写。因此 OpenCode 侧提供一个
+**JS SDK**：订阅 OpenCode 事件流，**进程内**把一轮交互归一成契约 `Trace` / `Step`，
+像 DeerFlow 的 `output:` 一样直接写本地 JSON——不需要接收端，也不依赖 SQLite 库表。
+
+JS SDK 以独立 npm 包形式发布在 **`js-sdk` 分支**（包根就是包本身），
+仓库内 `integrations/opencode/` 是开发副本，两者同步。
+
+```bash
+# 安装（一条命令，OpenCode 自带命令）：从 js-sdk 分支安装，并自动写入全局配置
+opencode plugin add github:pfy0/agent_trace_sdk#js-sdk
+
+# 配置输出路径后正常跑 OpenCode；每轮结束写一条 trace
+AGENT_TRACE_OUTPUT=outputs/opencode_traces.json
+```
+
+- **包组成**：`index.js`（包入口）→ `agent-trace.js` 用 `ctx.event.subscribe()`
+  订阅事件流；`session-collector.js` 归一，`trace-builder.js` 契约层，`exporters.js` 落盘。
+  安装详情与环境变量见各分支的 `README.md`。
+- **契约一致**：字段严格对齐 `schema/trace.schema.json`；工具成败判定与 Python
+  `agent_trace.tool_outcome` 逐条等价。JS 输出可直接过 Python 的
+  `Trace.model_validate`（`extra="forbid"`），由 `tests/test_opencode_js_sdk.py` 守护。
+
+事件映射（OpenCode 事件 → step）：
+
+| OpenCode 事件 | → step |
+| :--- | :--- |
+| `session.inbox.enqueued`（user） | `user_query`（同轮第 2 条起自动标 `is_follow_up`） |
+| `session.reasoning.started/delta/ended` | `reasoning` |
+| `session.text.started/delta/ended` | 先缓冲；收尾时最后一段升为 `final_answer` |
+| `session.tool.input.*` / `session.tool.called` | `tool_call`（`tool_calls[].function.name/arguments`） |
+| `session.tool.success` / `session.tool.failed` | `tool_response`（`tool_success` / `tool_name` / `parent_span_id` 自动回填） |
+| `session.step.ended`（tokens） | 该 assistant 消息首个 step 的 `prompt/completion_tokens_delta` |
+| `session.execution.succeeded/failed` | 收尾该轮并提交 |
+
+要点：
+
+- `turn_id` 自动生成为 `opencode:<sessionID>:<turn_no>`，`session_id` 取 OpenCode 的
+  `sessionID`；每条 user 消息 + 其后的 assistant 归为一个 turn。
+- **实时增量**：逐事件落步，不等整轮跑完再重放；**fail-open**：单条脏事件不打断整条流。
+- 工具成败复用统一口径 `agent_trace.tool_outcome`（与 DeerFlow 同一套两层判定）。
+
 ## 接入方式总览
 
-SDK 提供三种接入方式，全部含可运行示例，详见 **`docs/integration-methods.md`**：
+SDK 提供四种接入方式，全部含可运行示例，详见 **`docs/integration-methods.md`**：
 
 | 方式 | 适用场景 | 改动量 |
 | :--- | :--- | :--- |
 | ① 手动埋点 API（含 `with turn.step(...)` 自动计时写法） | 任意框架、自研 Agent，逐步精确控制 | 每个 step 一行调用 |
 | ② 装饰器 `@tracer.trace` / `@tracer.step` | 已函数化、边界清晰的一轮 / 一步 | 加一个装饰器 |
 | ③ 框架集成（DeerFlow / LangGraph 中间件） | 跑在 DeerFlow / LangGraph 上 | **零业务改动** |
+| ④ 框架集成（OpenCode JS SDK） | 跑在 OpenCode 上 | 装一个采集插件（进程内归一，直接出 JSON） |
 
 > 该文档同时对比了阿里云 AgentLoop 的三条管道（eBPF / LoongSuite Pilot / 语言与框架探针），
 > 说明本项目「不止手动埋点」的边界与取舍。
@@ -444,9 +503,11 @@ src/agent_trace/
 ├── config.py        # 配置：环境变量 + 代码初始化
 ├── identity.py      # 可信身份解析：凭证 > 显式 > 上报 > 默认
 ├── redact.py        # 脱敏：可配规则擦除凭据 / 个人标识
+├── tool_outcome.py  # 工具成败判定的单一事实来源（各集成共用）
 ├── integrations/    # 框架适配（deerflow.py）
 ├── transport/       # HTTP 上报：队列 / 重试 / 失败落盘
 └── exporters/       # json / jsonl / xlsx / http / base
+integrations/opencode/  # OpenCode JS SDK（插件 + 归一 + 落盘）+ 安装说明
 examples/            # 可运行示例
 tools/release.py     # 一键构建 / 打 tag / 发布
 schema/              # 语言无关的 JSON Schema 契约
@@ -477,6 +538,10 @@ python examples/trusted_identity.py      # 可信身份注入（多用户共用 
 | `AGENT_TRACE_REDACT` | 脱敏总开关 | `true` |
 | `AGENT_TRACE_REDACT_CONTENT` | 脱敏 `step.content` | `true` |
 | `AGENT_TRACE_REDACT_ARGUMENTS` | 脱敏 `tool_calls.arguments` | `true` |
+
+> OpenCode JS SDK 另用一组环境变量：`AGENT_TRACE_OUTPUT`（输出 JSON 路径）、
+> `AGENT_TRACE_AGENT_ID`、`AGENT_TRACE_APP_NAME`、`AGENT_TRACE_DEBUG` 等，
+> 见 `integrations/opencode/README.md`。
 
 > 注意：环境变量里的 `user_id` / `app_id` / `app_name` / `system_code` 属于
 > **不可信默认值**，会被服务端可信身份覆盖（见「可信身份」）。它只适合单机 /

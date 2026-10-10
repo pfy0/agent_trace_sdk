@@ -1,7 +1,7 @@
 # 接入方式总览与示例
 
 > 最后更新：2026-10-08
-> 对应版本：agent-trace-sdk v0.6.0
+> 对应版本：agent-trace-sdk v0.7.0
 > 参考：阿里云 AgentLoop《选择 AI Agent 接入方式》
 > https://help.aliyun.com/zh/agentloop/select-the-ai-agent-integration-method
 > 与《接入 LangChain & LangGraph 应用》
@@ -17,12 +17,15 @@
 | ① 手动埋点 API | 任意框架、自研 Agent，需要精确控制每一步 | 每个 step 一行调用 | 半手动 |
 | ② 装饰器 `@tracer.trace` / `@tracer.step` | 已函数化、边界清晰的一轮 / 一步 | 加一个装饰器 | 半自动（自动出入参） |
 | ③ 框架集成（DeerFlow / LangGraph 中间件） | 跑在 DeerFlow / LangGraph 上的 Agent | **零业务改动**，仅注册插件 | 全自动 |
+| ④ 框架集成（OpenCode JS SDK） | 跑在 OpenCode 上的 Agent | 装一个采集插件（进程内归一，直接出 JSON） | 全自动 |
 
 - ① 由 `src/agent_trace/tracer.py` 提供，其中 `with turn.step(...)` 是它的自动计时写法
   （记录该步起止时间与 `latency_ms`），不是独立的接入方式。
 - ② 同样由 `tracer.py` 提供，可和 ① 在同一轮里混用。
 - ③ 由 `src/agent_trace/integrations/deerflow.py` 提供，以 LangGraph 中间件形式
   自动把消息流还原成 step，不改业务执行代码。
+- ④ 由 `integrations/opencode/` 提供（JS SDK）：OpenCode 侧订阅事件流，**进程内**
+  按契约归一，直接写本地 JSON（见第 5.1 节）。
 
 ---
 
@@ -227,8 +230,47 @@ middleware = AgentTraceMiddleware(tracer)
   中间件并入同 session 的上一轮，保证"提问 → 反问 → 澄清 → 完成"是一条完整 trace。
 - 无 langchain 的环境下本模块仍可 import（中间件退化为普通类，便于纯逻辑单测）。
 
-### 上报到采集服务（任意接入方式通用）
+### 5.1 接入方式④：OpenCode（JS SDK，进程内归一，直接出 JSON）
 
+OpenCode 运行时是 Node/Bun，插件只能用 JS/TS 写，Python SDK 进不去那个进程。
+因此 OpenCode 侧提供一个**JS SDK**（`integrations/opencode/`）：订阅 OpenCode 事件流，
+**进程内**把一轮交互归一成契约 `Trace` / `Step`，像 DeerFlow 的 `config.output` 一样
+直接写本地 JSON——不需要接收端，也不依赖在线服务：
+
+- **插件入口**：`integrations/opencode/index.js`（目录形态入口，OpenCode 自动加载）
+  → `agent-trace.js`，用 `ctx.event.subscribe()`
+  订阅事件流并喂给采集器（退出时兜底收尾）。
+- **归一**：`session-collector.js`（事件 → 轮次/步）、`trace-builder.js`（契约层）、
+  `exporters.js`（JSON / JSONL 落盘）。安装见 `integrations/opencode/README.md`。
+
+> **为什么是订阅事件而不是读库**：旧方案读 OpenCode 的 SQLite 再上报服务端归一。
+> 实测 opencode 2.0.26 发现官方事件通道可用（`session.reasoning.*` / `session.text.*`
+> / `session.tool.*` / `session.step.ended` / `session.execution.*`），于是改为订阅
+> 事件流：实时增量、不依赖库表结构、无需常驻接收端。
+> 订阅要点：`ctx.event.subscribe()` 返回带 `Symbol.asyncIterator` 的事件流，必须自己
+> 反复 `.next()` 泵取（回调式不触发，`for await` 会被插件编译器拒绝）。
+
+```bash
+# 从 js-sdk 分支一键安装（OpenCode 自带命令，自动写入全局配置）
+opencode plugin add github:pfy0/agent_trace_sdk#js-sdk
+
+# 配置输出路径后正常跑 OpenCode；每轮结束写一条 trace
+AGENT_TRACE_OUTPUT=outputs/opencode_traces.json
+```
+
+> JS SDK 以独立 npm 包发布在 `js-sdk` 分支，包根即包本身。
+> 仓库内 `integrations/opencode/` 为开发副本，两者同步维护。
+
+要点：
+
+- **字段严格对齐 schema**：序列化丢弃空值，对齐 Python `serializable()`；工具成败
+  复用统一口径（与 DeerFlow 同一套两层判定）。JS 输出可直接过 Python
+  `Trace.model_validate`（`extra="forbid"`），由 `tests/test_opencode_js_sdk.py` 守护。
+- `turn_id` 自动生成为 `opencode:<sessionID>:<turn_no>`，`session_id` 取 OpenCode 的
+  `sessionID`；每条 user 消息 + 其后的 assistant 归为一个 turn。
+- **非阻塞 / fail-open**：事件旁路泵取，逐事件处理；单条脏事件不打断整条流。
+- 契约语言无关：schema 是唯一真源，Python 侧的 `schema/trace.schema.json` 可直接校验
+  JS 输出。
 前面三种方式采完的 trace，都可以通过 `HttpExporter` 非阻塞上报
 （后台线程组批、指数退避重试、失败落盘 spool、进程重启后可补发）：
 

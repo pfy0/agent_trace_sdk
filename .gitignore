@@ -36,3 +36,6 @@ Thumbs.db
 spool/
 *.jsonl
 output/
+outputs/
+# 但测试 fixture 需要纳入版本库
+!tests/fixtures/**/*.jsonl
