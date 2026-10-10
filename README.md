@@ -20,17 +20,28 @@ Agent 运行轨迹采集 SDK。业务方以**最小改动**接入后，SDK 自�
 **业务方（从 GitHub 私有仓库安装）**：
 
 ```bash
-pip install "git+https://github.com/pfy0/agent_trace_sdk.git@v0.7.0"
+pip install "git+https://github.com/pfy0/agent_trace_sdk.git@v0.7.1"
 ```
 
 - 需要：机器能访问 GitHub、装了 `git`、对仓库有读权限。
 - 私有仓库还需带上凭证（SSH key 或 Token）：
-  `pip install "git+ssh://git@github.com/pfy0/agent_trace_sdk.git@v0.7.0"`
+  `pip install "git+ssh://git@github.com/pfy0/agent_trace_sdk.git@v0.7.1"`
 - 装可选依赖（Excel 导出等）：
-  `pip install "agent-trace-sdk[all] @ git+https://github.com/pfy0/agent_trace_sdk.git@v0.7.0"`
+  `pip install "agent-trace-sdk[all] @ git+https://github.com/pfy0/agent_trace_sdk.git@v0.7.1"`
 
 固定 tag 安装，版本可复现。完整说明（Token 配置、升级、离线 wheel、
 DeerFlow/uv 安装）见 `docs/distribute.md`。
+
+### v0.7.1 变更提示（修正 OpenCode 的 turn_id 形态）
+
+**修正**：
+
+- **OpenCode 的 `turn_id` 改为契约形态 `turn_<32位hex>`**（与 Python
+  `generate_id("turn")` 同形），不再是 `opencode:<sessionID>:<turn_no>`。
+- `session_id` 保留 OpenCode 原生的 `ses_xxx`（不伪造，与 DeerFlow 取
+  `thread_id` 同理）。
+- 影响：按 `turn_id` 做主键入库的下游需注意新格式；若已按旧格式
+  存量，新旧数据的 `turn_id` 形态会不一致。
 
 ### v0.7.0 变更提示（新增 OpenCode 集成；工具成败判定收敛为单一事实来源）
 
