@@ -24,9 +24,12 @@ opencode plugin add github:pfy0/agent_trace_sdk#js-sdk
 ```jsonc
 // ~/.config/opencode/opencode.json
 {
-  "plugin": ["github:pfy0/agent_trace_sdk#js-sdk"]
+  "plugins": ["github:pfy0/agent_trace_sdk#js-sdk"]
 }
 ```
+
+> 配置键是 **`plugins`（复数）**；它支持 npm 包 / git 源 / 本地路径。
+> 旧的 **`plugin`（单数）** 键只接受 npm 包或 git 源。
 
 ### 3. 本地目录（离线 / 内网）
 
