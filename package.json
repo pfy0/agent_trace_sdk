@@ -1,6 +1,6 @@
 {
   "name": "agent-trace-opencode",
-  "version": "0.7.0",
+  "version": "0.8.0",
   "description": "Agent Trace 的 OpenCode 采集插件：订阅 OpenCode 事件流，进程内归一成契约 Trace，直接写本地 JSON",
   "type": "module",
   "license": "MIT",

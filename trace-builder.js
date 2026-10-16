@@ -276,7 +276,7 @@ export class Turn {
       agent_id: this.agentId,
       parent_agent_id: this.parentAgentId,
       conversations_type: this.conversationsType,
-      conversations: this.steps.map((step) => prune(step)),
+      conversations: { messages: this.steps.map((step) => prune(step)) },
       completed: this.completed,
       partial: this.partial,
       api_calls: this.apiCalls,

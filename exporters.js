@@ -49,7 +49,7 @@ export class JsonlExporter {
 
   export(trace) {
     const meta = Object.assign({}, trace);
-    const steps = meta.conversations || [];
+    const steps = (meta.conversations && meta.conversations.messages) || [];
     delete meta.conversations;
     for (const step of steps) {
       const row = Object.assign({}, meta, step);
