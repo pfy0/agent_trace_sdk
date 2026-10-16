@@ -154,7 +154,8 @@ class TracerIntegrationTest(unittest.TestCase):
             turn.record_tool_call([("http", {"password": "hunter2", "url": "postgres://u:p@h/db"})])
             turn.record_final_answer("a")
         payload = memory.traces[0].serializable()
-        arguments = payload["conversations"][1]["tool_calls"][0]["function"]["arguments"]
+        messages = payload["conversations"]["messages"]
+        arguments = messages[1]["tool_calls"][0]["function"]["arguments"]
         self.assertEqual(arguments["password"], "[REDACTED:secret_key]")
         self.assertIn("[REDACTED:url_credentials]", arguments["url"])
 
@@ -165,7 +166,7 @@ class TracerIntegrationTest(unittest.TestCase):
             turn.record_user_query("手机 13812345678")
             turn.record_final_answer("a")
         payload = memory.traces[0].serializable()
-        self.assertIn("13812345678", payload["conversations"][0]["content"])
+        self.assertIn("13812345678", payload["conversations"]["messages"][0]["content"])
 
 
 if __name__ == "__main__":

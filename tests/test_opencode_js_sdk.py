@@ -42,7 +42,8 @@ def test_tool_turn_matches_python_contract():
     assert len(traces) == 1
     t = traces[0]
     Trace.model_validate(t)  # 严格校验（多余/缺失字段都会抛）
-    types = [s["message_type"] for s in t["conversations"]]
+    messages = t["conversations"]["messages"]
+    types = [s["message_type"] for s in messages]
     assert types[0] == "user_query"
     assert "tool_call" in types and "tool_response" in types
     assert types[-1] == "final_answer"
@@ -50,8 +51,8 @@ def test_tool_turn_matches_python_contract():
     assert t["toolsets_used"] == ["shell"]
     assert t["token_usage"]["total_tokens"] > 0
     assert t["completed"] is True
-    res = [s for s in t["conversations"] if s["message_type"] == "tool_response"][0]
-    call = [s for s in t["conversations"] if s["message_type"] == "tool_call"][0]
+    res = [s for s in messages if s["message_type"] == "tool_response"][0]
+    call = [s for s in messages if s["message_type"] == "tool_call"][0]
     assert res["parent_span_id"] == call["span_id"]
     assert res["tool_call_id"] == call["tool_calls"][0]["id"]
     assert res["tool_success"] == 1
@@ -62,7 +63,7 @@ def test_text_turn_matches_python_contract():
     assert len(traces) == 1
     t = traces[0]
     Trace.model_validate(t)
-    types = [s["message_type"] for s in t["conversations"]]
+    types = [s["message_type"] for s in t["conversations"]["messages"]]
     assert types == ["user_query", "reasoning", "final_answer"]
     assert t.get("tool_stats") is None  # prune 丢空值，键不存在
     assert t["token_usage"]["total_tokens"] > 0
@@ -85,7 +86,9 @@ def test_step_fields_exactly_match_schema():
     traces = run_js("events_tool.jsonl")
     t = traces[0]
     py = Trace.model_validate(t).serializable()
-    for js_step, py_step in zip(t["conversations"], py["conversations"]):
+    for js_step, py_step in zip(
+        t["conversations"]["messages"], py["conversations"]["messages"]
+    ):
         assert set(js_step.keys()) == set(py_step.keys()), js_step["step_no"]
     assert set(t.keys()) == set(py.keys())
 

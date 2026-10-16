@@ -58,8 +58,8 @@ def main() -> None:
     print("turn_id    :", trace["turn_id"])
     print("turn_no    :", trace["turn_no"])
     print("completed  :", trace["completed"], "| partial:", trace["partial"])
-    print("steps      :", len(trace["conversations"]))
-    for step in trace["conversations"]:
+    print("steps      :", len(trace["conversations"]["messages"]))
+    for step in trace["conversations"]["messages"]:
         print("  %d. %-14s %-14s latency_ms=%s"
               % (step["step_no"], step["message_id"], step["message_type"], step.get("latency_ms")))
     print("导出文件   :", ", ".join(sorted(os.listdir(OUTPUT_DIR))))

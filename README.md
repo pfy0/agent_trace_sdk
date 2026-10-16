@@ -7,7 +7,7 @@ Agent 运行轨迹采集 SDK。业务方以**最小改动**接入后，SDK 自�
 ## 采集单位
 
 - **Trace**：一次 agent 运行 = 一个 turn = 一轮交互，是采集/校验/上报的基本单位。
-- **Step**：trace 中的一步，即 `conversations` 数组里的一条消息。
+- **Step**：trace 中的一步，即 `conversations.messages` 数组里的一条消息。
 - 轮次边界由 `turn_id` 决定：**同一 `turn_id` 下的消息属于同一轮**，一轮内可以出现
   多条 `user_query`（第一条是初始输入，其余是追问/补充，会标记 `is_follow_up=True`），
   不做切分；跨轮切分只按 `turn_id`。
@@ -20,17 +20,34 @@ Agent 运行轨迹采集 SDK。业务方以**最小改动**接入后，SDK 自�
 **业务方（从 GitHub 私有仓库安装）**：
 
 ```bash
-pip install "git+https://github.com/pfy0/agent_trace_sdk.git@v0.7.1"
+pip install "git+https://github.com/pfy0/agent_trace_sdk.git@v0.8.0"
 ```
 
 - 需要：机器能访问 GitHub、装了 `git`、对仓库有读权限。
 - 私有仓库还需带上凭证（SSH key 或 Token）：
-  `pip install "git+ssh://git@github.com/pfy0/agent_trace_sdk.git@v0.7.1"`
+  `pip install "git+ssh://git@github.com/pfy0/agent_trace_sdk.git@v0.8.0"`
 - 装可选依赖（Excel 导出等）：
-  `pip install "agent-trace-sdk[all] @ git+https://github.com/pfy0/agent_trace_sdk.git@v0.7.1"`
+  `pip install "agent-trace-sdk[all] @ git+https://github.com/pfy0/agent_trace_sdk.git@v0.8.0"`
 
 固定 tag 安装，版本可复现。完整说明（Token 配置、升级、离线 wheel、
 DeerFlow/uv 安装）见 `docs/distribute.md`。
+
+### v0.8.0 变更提示（conversations 改为 `{messages: [...]}` 结构）
+
+**不向后兼容（线格式变更）**：
+
+- **`conversations` 由数组改为对象**，步骤数组移到 `conversations.messages`：
+
+  ```diff
+  - "conversations": [ { "message_id": "msg_usr_1", ... } ]
+  + "conversations": { "messages": [ { "message_id": "msg_usr_1", ... } ] }
+  ```
+
+  覆盖 Python SDK、JSON Schema（新增 `Conversations` 定义）与 OpenCode JS SDK。
+  - **下游影响**：按 `trace["conversations"]` 当数组遍历、取长度或下标的代码，
+    需改为 `trace["conversations"]["messages"]`；XLSX / JSONL 导出器与
+  DeerFlow 集成已同步适配。
+  - Python 侧新增 `agent_trace.Conversations` 模型（`conversations` 字段类型）。
 
 ### v0.7.1 变更提示（修正 OpenCode 的 turn_id 形态）
 
@@ -121,7 +138,7 @@ DeerFlow/uv 安装）见 `docs/distribute.md`。
 
 - **Trace 级统计由 SDK 自动聚合**（此前是预留空位）：`toolsets_used`、
   `tool_stats`、`tool_error_counts`、`token_usage`，在 `as_trace()` 里按
-  `conversations` 汇总。业务方仍可用 `Turn(..., tool_stats=...)` 等覆盖自动值。
+  `conversations.messages` 汇总。业务方仍可用 `Turn(..., tool_stats=...)` 等覆盖自动值。
   聚合规则见下方「Trace 级统计的聚合规则」。
 
 ### v0.4.4 变更提示（脱敏默认层增强 + 移除离线导入）
@@ -265,8 +282,8 @@ OpenAI 风格的完整对象、以及它们的列表。
 
 ## 先后顺序与工具关联
 
-`conversations` 是一维数组，**先后顺序由 `step_no` 表达**；工具调用与工具返回之间用
-`tool_calls[].id` <-> `tool_call_id` 关联：
+`conversations` 是形如 `{"messages": [...]}` 的对象，**先后顺序由 `step_no` 表达**；
+工具调用与工具返回之间用 `tool_calls[].id` <-> `tool_call_id` 关联：
 
 ```
 step 3  tool_call      tool_calls: [{id: "call_0964..."}, {id: "call_19bc..."}]
@@ -329,10 +346,10 @@ Trace 字段（与公司《轨迹数据规范》对齐）：
   `agent_id`、`parent_agent_id`。其中前四个是**身份属性**、`source` 是**请求属性**，
   信任模型见下文「可信身份」。
 - 会话内容：`conversations_type`（缺省 `openai_messages`）与 `conversations`
-  （该轮全部 step 的数组）。
+  （对象，`conversations.messages` 是该轮全部 step 的数组）。
 - 结束状态：`completed` / `partial`。
 - 统计：`toolsets_used`、`tool_stats`、`tool_error_counts`、`token_usage`
-  **由 SDK 在 `as_trace()` 里按 `conversations` 自动聚合**；`api_calls`
+  **由 SDK 在 `as_trace()` 里按 `conversations.messages` 自动聚合**；`api_calls`
   仍为预留空位（SDK 不填）。没有工具调用 / token 数据的轮次不产出对应字段。
 - 扩展（可选）：`metadata`、`extra_info`。
 
@@ -347,7 +364,7 @@ Trace 字段（与公司《轨迹数据规范》对齐）：
 
 ### Trace 级统计的聚合规则
 
-`as_trace()` 按 `conversations` 自动汇总（业务方可用 `Turn(..., tool_stats=...)`
+`as_trace()` 按 `conversations.messages` 自动汇总（业务方可用 `Turn(..., tool_stats=...)`
 等 Trace 字段覆盖自动值）：
 
 | 字段 | 来源 | 规则 |

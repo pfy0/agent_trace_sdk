@@ -15,9 +15,10 @@
 
 层级说明
 --------
-`conversations` 是一维数组，先后顺序由 `step_no` 表达；工具调用与返回之间用
-`tool_calls[].id` <-> `tool_call_id` 关联。不再引入 span 层级字段；若业务方需要
-标注"这一步属于哪个子 agent"等额外信息，用 Trace 级 `metadata` 承载。
+`conversations` 形如 `{"messages": [...]}`，一维数组的顺序由 `step_no` 表达；
+工具调用与返回之间用 `tool_calls[].id` <-> `tool_call_id` 关联。不再引入 span
+层级字段；若业务方需要标注"这一步属于哪个子 agent"等额外信息，用 Trace 级
+`metadata` 承载。
 """
 from __future__ import annotations
 
@@ -471,7 +472,9 @@ class Turn:
             "completed": self.completed,
             "partial": self.partial,
             "metadata": metadata or None,
-            "conversations": [step.model_dump(mode="python") for step in self._steps],
+            "conversations": {
+                "messages": [step.model_dump(mode="python") for step in self._steps]
+            },
         }
         # 可信解析结果覆盖 config 默认值（含 source）
         payload.update(self.identity.values)

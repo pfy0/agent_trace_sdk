@@ -72,7 +72,7 @@ def main() -> None:
 
     trace = middleware.tracer._exporters[0].traces[0].serializable()
     print("\nturn_id:", trace["turn_id"], "| session:", trace["session_id"])
-    for step in trace["conversations"]:
+    for step in trace["conversations"]["messages"]:
         print("  %d. %-14s %s" % (step["step_no"], step["message_type"], (step.get("content") or "")[:28]))
 
 

@@ -33,9 +33,9 @@ class JsonlExporter(Exporter):
 
     def _rows(self, trace: Trace) -> List[Dict[str, Any]]:
         payload = trace.serializable()
-        conversation = payload.pop("conversations", [])
+        conversation = payload.pop("conversations", {}) or {}
         rows: List[Dict[str, Any]] = []
-        for step in conversation:
+        for step in conversation.get("messages", []):
             if self.include_trace_meta:
                 row = dict(payload)
                 row.update(step)

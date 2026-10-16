@@ -89,7 +89,7 @@ with tracer.turn(turn_id="turn-demo-1", session_id="sess-demo-1", turn_no=1) as 
 
     turn.record_final_answer("今日 AI 要闻速递：……")
 
-print("steps:", len(memory.traces[0].conversations))
+print("steps:", len(memory.traces[0].conversations.messages))
 ```
 
 要点：
@@ -126,7 +126,7 @@ with tracer.turn(turn_id="t-ctx", session_id="s-1", turn_no=1) as turn:
     with turn.step("final_answer") as step:
         step.set_content("杭州：小雨 20℃")
 
-for step in memory.traces[0].conversations:
+for step in memory.traces[0].conversations.messages:
     print(step.step_no, step.message_type.value, "latency_ms=", step.latency_ms)
 ```
 
@@ -166,7 +166,7 @@ def answer(question: str) -> dict:
 answer("2026 世界人工智能大会的主题是什么",
        turn_id="turn-demo-2", session_id="sess-demo-1", turn_no=2)
 
-print("steps:", len(memory.traces[0].conversations))
+print("steps:", len(memory.traces[0].conversations.messages))
 ```
 
 要点：

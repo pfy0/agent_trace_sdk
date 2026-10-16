@@ -12,7 +12,7 @@
   AIMessage.content -> reasoning（伴随 tool_calls 时）/ final_answer（收尾时）
   AIMessage.tool_calls -> tool_call（多个调用合并为 1 个 step）
   ToolMessage -> tool_response
-- 层级：`conversations` 一维数组，先后顺序由 step_no 表达；工具调用与返回用
+- 层级：`conversations.messages` 一维数组，先后顺序由 step_no 表达；工具调用与返回用
   `tool_calls[].id` <-> `tool_call_id` 关联。多 agent 场景下每个 run 各自产出一条
   trace，靠 session_id 关联。
 

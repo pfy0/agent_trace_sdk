@@ -357,5 +357,5 @@ class Redactor:
         """就地擦除整条 trace 的所有 step。"""
         if not self.enabled:
             return
-        for step in trace.conversations:
+        for step in trace.conversations.messages:
             self.redact_step(step)

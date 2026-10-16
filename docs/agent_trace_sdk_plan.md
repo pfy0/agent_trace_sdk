@@ -17,7 +17,7 @@
 系统提示词、用户输入、推理过程、工具调用、工具返回、最终回答，结构化后导出或上报。
 
 - **Trace**：一次 agent 运行 = 一个 turn = 一轮交互，是采集/校验/上报的基本单位。
-- **Step**：trace 中的一步，即 `conversations` 数组里的一条消息。
+- **Step**：trace 中的一步，即 `conversations.messages` 数组里的一条消息。
 - 轮次边界由 `turn_id` 决定；`turn_id`、`session_id`、`turn_no`（会话内第几轮）
   均由业务方传入（`turn_id` / `session_id` 缺省时 SDK 生成，见第 3 节）。
 
@@ -85,7 +85,7 @@ docs/                 # 本文 + distribute.md（安装与发布）
   `start_time`、`end_time`、`create_time`（入库生成）
 - 业务标识：`app_name`、`app_id`、`system_code`、`user_id`、`source`、
   `agent_id`、`parent_agent_id`
-- 会话内容：`conversations_type`、`conversations`
+- 会话内容：`conversations_type`、`conversations`（对象，`conversations.messages` 为步骤数组）
 - 结束状态：`completed`、`partial`
 - 统计：`api_calls`、`toolsets_used`、`tool_stats`、`tool_error_counts`、`token_usage`
 - 扩展：`metadata`、`extra_info`
@@ -101,7 +101,7 @@ docs/                 # 本文 + distribute.md（安装与发布）
 
 校验规则：
 
-- `conversations` 非空，且至少含一条 `user_query`。
+- `conversations.messages` 非空，且至少含一条 `user_query`。
 - 首步必须是 `system_prompt` 或 `user_query`。
 - `step_no` 必须从 1 起连续递增。
 - `message_id` 格式合法。
@@ -145,8 +145,8 @@ with tracer.turn(turn_id="t-1", session_id="s-1") as turn:
 
 ### 2.3 先后顺序、工具关联与 span 树
 
-`conversations` 是一维数组，先后顺序由 `step_no` 表达；工具调用与返回用
-`tool_calls[].id` <-> `tool_call_id` 关联。
+`conversations` 是形如 `{"messages": [...]}` 的对象，先后顺序由 `step_no` 表达；
+工具调用与返回用 `tool_calls[].id` <-> `tool_call_id` 关联。
 
 **span 树（规则 B，全自动）**：每个 step 分配 `span_id`；`tool_call` 是父，
 指向它的 `tool_response` 是子——`parent_span_id` 由 SDK 顺着 `tool_call_id`
@@ -303,7 +303,7 @@ step 5  tool_response   span=span_C   parent=span_A
 | 唯一标识 | 不引入独立 `trace_id`，`turn_id` 即 trace 标识 | `schemas.Trace` |
 | `turn_id` / `session_id` | 由业务方传入；缺省时 SDK 生成（`turn_xxx` / `sess_xxx`） | `Tracer.turn()` |
 | `turn_no` | 会话内第几轮，业务方传入，缺省 1 | `schemas.Trace` |
-| 字段名 | 步骤数组用 `conversations`（复数，数组类型） | `schemas.Trace` |
+| 字段名 | 步骤容器用 `conversations`（对象，`conversations.messages` 为数组） | `schemas.Trace` |
 | `conversations_type` | 会话格式标识，业务方传入，缺省 `openai_messages` | `schemas.Trace` |
 | 结束状态 | 用 `completed` + `partial` 取代单一 `status`；**仅 Trace 级**，Step 不再有 | `schemas.py` |
 | 必填性 | 新字段都给安全默认值，不破坏既有调用 | `schemas.py` / `config.py` |

@@ -119,7 +119,7 @@ class StepDecoratorDegradationTest(unittest.TestCase):
             turn.record_final_answer("A")
         self.assertEqual(stream.getvalue(), "")
         self.assertEqual(
-            [step.message_type.value for step in memory.traces[0].conversations],
+            [step.message_type.value for step in memory.traces[0].conversations.messages],
             ["user_query", "reasoning", "final_answer"],
         )
 

@@ -1,5 +1,21 @@
 {
   "$defs": {
+    "Conversations": {
+      "additionalProperties": false,
+      "description": "一轮会话内容：`{messages: [Step, ...]}`。\n\n对外契约形如 ``\"conversations\": {\"messages\": [...]}``；先后顺序由每个\nstep 的 ``step_no`` 表达，工具调用与返回用 ``tool_calls[].id`` <->\n``tool_call_id`` 关联。",
+      "properties": {
+        "messages": {
+          "description": "该轮的全部步骤",
+          "items": {
+            "$ref": "#/$defs/Step"
+          },
+          "title": "Messages",
+          "type": "array"
+        }
+      },
+      "title": "Conversations",
+      "type": "object"
+    },
     "MessageType": {
       "description": "消息类型枚举，取值与 message_id 缩写、role 的映射见 MESSAGE_TYPE_META。",
       "enum": [
@@ -414,12 +430,8 @@
       "type": "string"
     },
     "conversations": {
-      "description": "该轮的全部步骤",
-      "items": {
-        "$ref": "#/$defs/Step"
-      },
-      "title": "Conversations",
-      "type": "array"
+      "$ref": "#/$defs/Conversations",
+      "description": "该轮会话内容，形如 {messages: [...]}"
     },
     "completed": {
       "default": true,

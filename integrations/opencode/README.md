@@ -72,7 +72,7 @@ Windows 永久设置：`setx AGENT_TRACE_OUTPUT "D:\traces\opencode.json"`（重
 
 ## 输出
 
-顶层是 trace 数组，元素是契约信封；`conversations` 里是每一步：
+顶层是 trace 数组，元素是契约信封；`conversations.messages` 里是每一步：
 
 ```json
 [
@@ -83,11 +83,13 @@ Windows 永久设置：`setx AGENT_TRACE_OUTPUT "D:\traces\opencode.json"`（重
     "app_name": "opencode",
     "agent_id": "agent-opencode",
     "conversations_type": "openai_messages",
-    "conversations": [
-      { "message_id": "msg_usr_1", "message_type": "user_query", "role": "user" },
-      { "message_id": "msg_rsn_1", "message_type": "reasoning", "role": "assistant" },
-      { "message_id": "msg_ans_1", "message_type": "final_answer", "role": "assistant" }
-    ],
+    "conversations": {
+      "messages": [
+        { "message_id": "msg_usr_1", "message_type": "user_query", "role": "user" },
+        { "message_id": "msg_rsn_1", "message_type": "reasoning", "role": "assistant" },
+        { "message_id": "msg_ans_1", "message_type": "final_answer", "role": "assistant" }
+      ]
+    },
     "completed": true,
     "tool_stats": { "shell": { "total": 1, "success": 1, "failure": 0 } },
     "token_usage": { "prompt_tokens": 9574, "completion_tokens": 61, "total_tokens": 9635 },

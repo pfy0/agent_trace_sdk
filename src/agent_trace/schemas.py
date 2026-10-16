@@ -5,7 +5,7 @@ pydantic 模型里，schema 演进时只需改这里。
 
 两层数据模型：
 - Trace：一次 agent 运行 = 一个 turn = 一轮交互，主键 `turn_id`。
-- Step：trace 中的一步，即 `conversations` 数组里的一条消息。
+- Step：trace 中的一步，即 `conversations.messages` 数组里的一条消息。
 """
 from __future__ import annotations
 
@@ -85,7 +85,7 @@ class ToolCall(BaseModel):
 
 
 class Step(BaseModel):
-    """轨迹中的一步 = `conversations` 数组里的一个元素。"""
+    """轨迹中的一步 = `conversations.messages` 数组里的一个元素。"""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -165,6 +165,24 @@ class Step(BaseModel):
         """序列化为上报/导出用的字典，丢弃空值字段。"""
         return self.model_dump(mode="json", exclude_none=True, by_alias=True)
 
+
+class Conversations(BaseModel):
+    """一轮会话内容：`{messages: [Step, ...]}`。
+
+    对外契约形如 ``"conversations": {"messages": [...]}``；先后顺序由每个
+    step 的 ``step_no`` 表达，工具调用与返回用 ``tool_calls[].id`` <->
+    ``tool_call_id`` 关联。
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    messages: List[Step] = Field(default_factory=list, description="该轮的全部步骤")
+
+    def serializable(self) -> Dict[str, Any]:
+        """序列化为上报/导出用的字典，丢弃空值字段。"""
+        return {"messages": [step.serializable() for step in self.messages]}
+
+
 class Trace(BaseModel):
     """一次 agent 运行 = 一个 turn = 一轮交互，是采集/校验/上报的基本单位。
 
@@ -221,7 +239,10 @@ class Trace(BaseModel):
         default="openai_messages",
         description="会话格式标识：openai messages / sharegpt / 自定义 等",
     )
-    conversations: List[Step] = Field(default_factory=list, description="该轮的全部步骤")
+    conversations: Conversations = Field(
+        default_factory=lambda: Conversations(),
+        description="该轮会话内容，形如 {messages: [...]}",
+    )
 
     completed: bool = Field(default=True, description="该轮是否真正结束")
     partial: bool = Field(default=False, description="是否因超时等外部条件被截断")
@@ -238,28 +259,30 @@ class Trace(BaseModel):
 
     @model_validator(mode="after")
     def _validate_turn(self) -> "Trace":
-        if not self.conversations:
-            raise ValueError("conversations 不能为空：一个 trace 至少包含一个 step")
+        if not self.conversations.messages:
+            raise ValueError("conversations.messages 不能为空：一个 trace 至少包含一个 step")
 
         # 边界由 turn_id 决定：同一 turn_id 下的多条 user_query 属于同一轮，
         # 按数组顺序区分——第一条是初始输入，其余是追问/补充，不做切分。
         # 多轮对话的切分只能通过 turn_id（由业务方保证一轮一个 turn_id）。
         user_queries = [
-            step for step in self.conversations if step.message_type is MessageType.USER_QUERY
+            step
+            for step in self.conversations.messages
+            if step.message_type is MessageType.USER_QUERY
         ]
         if not user_queries:
             raise ValueError("一个 trace 至少要包含一个 user_query（该轮的用户输入）")
-        if self.conversations[0].message_type not in (
+        if self.conversations.messages[0].message_type not in (
             MessageType.USER_QUERY,
             MessageType.SYSTEM_PROMPT,
         ):
             raise ValueError(
                 "trace 的第一步应为 system_prompt 或 user_query，实际是 %s"
-                % self.conversations[0].message_type.value
+                % self.conversations.messages[0].message_type.value
             )
 
         # step_no 必须从 1 起连续递增
-        for index, step in enumerate(self.conversations, start=1):
+        for index, step in enumerate(self.conversations.messages, start=1):
             if step.step_no is not None and step.step_no != index:
                 raise ValueError(
                     "step_no 必须从 1 递增：第 %d 个 step 的 step_no=%s" % (index, step.step_no)
@@ -269,5 +292,5 @@ class Trace(BaseModel):
     def serializable(self) -> Dict[str, Any]:
         """序列化为上报/导出用的字典，丢弃空值字段。"""
         dumped = self.model_dump(mode="json", exclude_none=True, by_alias=True)
-        dumped["conversations"] = [step.serializable() for step in self.conversations]
+        dumped["conversations"] = self.conversations.serializable()
         return dumped

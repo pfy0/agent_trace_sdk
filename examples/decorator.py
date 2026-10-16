@@ -32,8 +32,8 @@ def main() -> None:
 
     trace = memory.traces[0].serializable()
     print("completed :", trace["completed"], "| partial:", trace["partial"],
-          "| steps:", len(trace["conversations"]))
-    for step in trace["conversations"]:
+          "| steps:", len(trace["conversations"]["messages"]))
+    for step in trace["conversations"]["messages"]:
         preview = step.get("content") or step.get("tool_calls")
         print("  %d. %-14s %s" % (step["step_no"], step["message_type"], str(preview)[:50]))
 
@@ -47,8 +47,8 @@ def main() -> None:
 
     failed = memory.traces[1].serializable()
     print("completed :", failed["completed"], "| partial:", failed["partial"])
-    print("最后一步:", failed["conversations"][-1]["message_type"],
-          "| step 字段:", sorted(failed["conversations"][-1]))
+    print("最后一步:", failed["conversations"]["messages"][-1]["message_type"],
+          "| step 字段:", sorted(failed["conversations"]["messages"][-1]))
 
 
 if __name__ == "__main__":

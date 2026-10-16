@@ -40,6 +40,7 @@ from .identity import (
 from .redact import EntropyRule, RedactionRule, Redactor, default_rules, is_sensitive_key
 from .schemas import (
     MESSAGE_TYPE_META,
+    Conversations,
     MessageType,
     Role,
     Step,
@@ -53,7 +54,7 @@ from .tool_outcome import judge_tool_success
 from .tracer import Tracer, Turn
 from .transport import TransportError
 
-__version__ = "0.7.1"
+__version__ = "0.8.0"
 
 __all__ = [
     "__version__",
@@ -61,6 +62,7 @@ __all__ = [
     "Turn",
     "Config",
     "Trace",
+    "Conversations",
     "Step",
     "ToolCall",
     "MessageType",

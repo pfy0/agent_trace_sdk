@@ -1,6 +1,6 @@
 """JSON 导出器：把所有 trace 汇总写到一个 JSON 文件。
 
-顶层是 trace 数组，每个元素是一个 trace 信封（含 conversations）。
+顶层是 trace 数组，每个元素是一个 trace 信封（含 conversations.messages）。
 默认在 export 时增量落盘，保证进程异常退出也不丢已采集数据。
 """
 from __future__ import annotations
