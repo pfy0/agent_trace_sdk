@@ -415,17 +415,21 @@ class AgentTraceMiddleware(_AgentMiddleware):
         if role == "ai":
             calls = _tool_calls_of(message)
             prompt_delta, completion_delta = _token_deltas(message)
-            if text:
+            # 一次 LLM 调用必有一处携带 token：优先挂在文本产出的 reasoning 上；
+            # 文本为空（或只有空白，如模型只吐换行再发 tool_calls）时，挂到
+            # 紧随其后的 tool_call 上，token 绝不丢，也不落空白噪声 step。
+            token_kwargs: Dict[str, Any] = {
+                "prompt_tokens_delta": prompt_delta,
+                "completion_tokens_delta": completion_delta,
+            }
+            if text.strip():
                 # 判定规则（与 TerminalResponseMiddleware 的语义对齐）：
                 # - 带 tool_calls 的 AI 文本 = 推理/规划 -> reasoning
                 # - 不带 tool_calls 的 AI 文本 = 候选最终回答 -> 先记为 reasoning，
                 #   若它确实是本轮最后一条 AI 文本，after_agent 会升级为 final_answer
                 #   （见 _close_turn 对 pending_final_ids 的处理）
-                turn.record_reasoning(
-                    text,
-                    prompt_tokens_delta=prompt_delta,
-                    completion_tokens_delta=completion_delta,
-                )
+                turn.record_reasoning(text, **token_kwargs)
+                token_kwargs = {}
                 if not calls:
                     pending_final_ids.add(turn.steps[-1].message_id)
             if calls:
@@ -437,7 +441,8 @@ class AgentTraceMiddleware(_AgentMiddleware):
                             function=call.get("function") or {},
                         )
                         for call in calls
-                    ]
+                    ],
+                    **token_kwargs,
                 )
             return
 

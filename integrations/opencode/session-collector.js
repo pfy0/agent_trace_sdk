@@ -264,11 +264,17 @@ export class OpencodeCollector {
     return seen ? seen.name : "tool";
   }
 
-  _emitToolCall(state, callId, name, args) {
+  _emitToolCall(state, callId, name, args, messageId) {
     if (state.toolCallsSeen[callId]) return;
     this._flushText(state, false);
     const step = state.turn.recordToolCall(callId, name || "tool", args, { start_ms: Date.now() });
     state.toolCallsSeen[callId] = { name: name || "tool", span_id: step.span_id };
+    // 一次 LLM 调用必有一处携带 token：文本 step 已在 _flushText 登记；这条消息
+    // 若只发工具调用（无文本），就把 tool_call 记为它的首个 step，token 由
+    // _applyTokens 挂到这里，避免纯工具调用的用量被丢弃。
+    if (messageId && !state.msgFirstStep[messageId]) {
+      state.msgFirstStep[messageId] = step;
+    }
   }
 
   _onToolInputStarted(session, data) {
@@ -291,7 +297,7 @@ export class OpencodeCollector {
     const args = this._parseArgs(data.text);
     const name = this._toolName(state, callId);
     delete state.toolCallsSeen[callId]; // 允许 _emitToolCall 真正落步
-    this._emitToolCall(state, callId, name, args);
+    this._emitToolCall(state, callId, name, args, data.assistantMessageID);
   }
 
   _onToolCalled(session, data) {
@@ -302,7 +308,7 @@ export class OpencodeCollector {
     if (state.toolCallsSeen[callId] && state.toolCallsSeen[callId].span_id) return;
     const name = data.name || this._toolName(state, callId);
     delete state.toolCallsSeen[callId];
-    this._emitToolCall(state, callId, name, data.input);
+    this._emitToolCall(state, callId, name, data.input, data.assistantMessageID);
   }
 
   _parseArgs(text) {
@@ -322,7 +328,13 @@ export class OpencodeCollector {
     if (state.toolAnswered[callId]) return;
     state.toolAnswered[callId] = true;
     if (!state.toolCallsSeen[callId]) {
-      this._emitToolCall(state, callId, this._toolName(state, callId), data.input);
+      this._emitToolCall(
+        state,
+        callId,
+        this._toolName(state, callId),
+        data.input,
+        data.assistantMessageID
+      );
     }
     const content = this._toolContent(data);
     const metadata = data.metadata || {};

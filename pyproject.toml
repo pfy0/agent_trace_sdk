@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "agent-trace-sdk"
-version = "0.8.0"
+version = "0.8.1"
 description = "Agent 运行轨迹采集 SDK：turn 粒度采集系统提示词、用户输入、推理、工具调用与最终回答，并结构化导出"
 readme = "README.md"
 requires-python = ">=3.9"

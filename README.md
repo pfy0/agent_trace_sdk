@@ -20,17 +20,31 @@ Agent 运行轨迹采集 SDK。业务方以**最小改动**接入后，SDK 自�
 **业务方（从 GitHub 私有仓库安装）**：
 
 ```bash
-pip install "git+https://github.com/pfy0/agent_trace_sdk.git@v0.8.0"
+pip install "git+https://github.com/pfy0/agent_trace_sdk.git@v0.8.1"
 ```
 
 - 需要：机器能访问 GitHub、装了 `git`、对仓库有读权限。
 - 私有仓库还需带上凭证（SSH key 或 Token）：
-  `pip install "git+ssh://git@github.com/pfy0/agent_trace_sdk.git@v0.8.0"`
+  `pip install "git+ssh://git@github.com/pfy0/agent_trace_sdk.git@v0.8.1"`
 - 装可选依赖（Excel 导出等）：
-  `pip install "agent-trace-sdk[all] @ git+https://github.com/pfy0/agent_trace_sdk.git@v0.8.0"`
+  `pip install "agent-trace-sdk[all] @ git+https://github.com/pfy0/agent_trace_sdk.git@v0.8.1"`
 
 固定 tag 安装，版本可复现。完整说明（Token 配置、升级、离线 wheel、
 DeerFlow/uv 安装）见 `docs/distribute.md`。
+
+### v0.8.1 变更提示（token 归属修正：一次 LLM 调用必有一处带 token）
+
+**修正**（DeerFlow 集成 + OpenCode JS SDK）：
+
+- **纯工具调用的 LLM 消息不再丢 token**。此前「带 tool_calls 但无文本」的
+  AI 消息，其用量算出来后无处挂载被丢弃，导致 `token_usage` 偏小。现在把
+  这次调用的 token 挂到它产出的第一个 step（有文本挂 `reasoning`，无文本挂
+  `tool_call`）。
+- **不再产生空白噪声 step**。模型只吐空白（如 `"\n\n"`）再发工具调用时，
+  DeerFlow 集成此前会落一条内容仅空白的 `reasoning`；现在按「去空白后仍有
+  内容」判定，不再落这种空 step。
+
+行为兼容，字段契约不变。
 
 ### v0.8.0 变更提示（conversations 改为 `{messages: [...]}` 结构）
 

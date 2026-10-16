@@ -92,3 +92,20 @@ def test_step_fields_exactly_match_schema():
         assert set(js_step.keys()) == set(py_step.keys()), js_step["step_no"]
     assert set(t.keys()) == set(py.keys())
 
+
+def test_tool_only_message_tokens_are_captured():
+    """纯工具调用的 LLM 消息（无文本）也要带上 token：fixture 里第一条 assistant
+    消息只发 shell 调用、无文本，它的用量必须挂在 tool_call step 上，不能丢。"""
+    traces = run_js("events_tool.jsonl")
+    t = traces[0]
+    messages = t["conversations"]["messages"]
+    tool_call = [s for s in messages if s["message_type"] == "tool_call"][0]
+    assert tool_call["prompt_tokens_delta"] > 0
+    assert tool_call["completion_tokens_delta"] >= 0
+    # 两次 LLM 调用的用量都进 token_usage（此前只有带文本的那次）
+    reasoning = [s for s in messages if s["message_type"] == "reasoning"][0]
+    expected = (
+        tool_call["prompt_tokens_delta"] + reasoning["prompt_tokens_delta"]
+    )
+    assert t["token_usage"]["prompt_tokens"] == expected
+
